@@ -1,0 +1,14 @@
+{
+    "name": "Doyun's UploadServer",
+    "storage": "local | gdrive",
+    "folderidlength": 6,
+    "deletelength": 8,
+    "gdrive": {
+        "credential" : {},
+        "scopes": ["https://www.googleapis.com/auth/drive"],
+        "root": ""
+    },
+    "local": {
+        "root": "/path/to/upload/folder"
+    }
+}
