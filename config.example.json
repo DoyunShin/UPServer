@@ -1,4 +1,5 @@
 {
+    "debug": false,
     "general": {
         "name": "Example's Upload",
         "brand": "Somebody",
