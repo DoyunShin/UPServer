@@ -57,9 +57,10 @@ class storage():
     def default(self, config: dict):
         self.folderidlength = config["folderidlength"]
         self.deletelength = config["deletelength"]
+        self.chunksize = 4096
         
 
-    def save(self, file: bytes, filename: str) -> dict:
+    def save(self, file, filesize: int, filename: str) -> dict:
         pass
 
     def loadmetadata(self, fileid: str, filename: str) -> dict:
@@ -84,12 +85,12 @@ class storage():
         return folderid
         
 
-    def make_metadata(self, file: bytes, filename: str, fileid: str, mimetype: str, folderid: str = None):        
+    def make_metadata(self, filesize: int, filename: str, fileid: str, mimetype: str, folderid: str = None):        
         return {
             "id": fileid,
             "name": filename,
             "mimeType": mimetype,
-            "size": len(file),
+            "size": filesize,
             "folderid": folderid,
             "delete": self.rnd(self.deletelength),
             "hidden": False,
@@ -102,6 +103,14 @@ class storage():
             mimetype = "application/octet-stream"
     
         return mimetype
+    
+    def write_stream(self, file, path: Path):
+        with path.open("wb") as f:
+            while True:
+                chunk = file.read(self.chunksize)
+                if not chunk:
+                    break
+                f.write(chunk)
     
 
 
@@ -147,7 +156,7 @@ class gdrive(storage):
         file = self.service.files().create(body=file_metadata, supportsAllDrives=True, fields='id').execute()
         return file.get('id')
 
-    def save(self, file: bytes, filename: str) -> dict:
+    def save(self, file, filesize: int, filename: str) -> dict:
         mimetype = self.get_mimetype(filename)
         fileid = self.create_fileid()
         folderid = self.mkdir(fileid)
@@ -161,13 +170,13 @@ class gdrive(storage):
             'name': metadataname,
             'parents': [folderid]
         }
-        metadata = self.make_metadata(file, filename, fileid, mimetype, folderid)
+        metadata = self.make_metadata(filesize, filename, fileid, mimetype, folderid)
         thistemp = self.tmpdir.mkid(fileid)
         metaPath = thistemp / metadataname
         filePath = thistemp / filename
 
         metaPath.write_text(dumps(metadata))
-        filePath.write_bytes(file)
+        self.write_stream(file, filePath)
 
         media = self.MediaFileUpload(filePath, mimetype=mimetype)
         mtdata = self.MediaFileUpload(metaPath, mimetype="application/json")
@@ -204,15 +213,15 @@ class local(storage):
         if not root.exists(): raise FileNotFoundError(f"Root directory {root} not found")
         self.root = root.resolve()
 
-    def save(self, file: bytes, filename: str) -> dict:
+    def save(self, file, filesize: int, filename: str) -> dict:
         fileid = self.create_fileid()
         mimetype = self.get_mimetype(filename)
         metadataname = filename+".metadata"
         folder = self.root / fileid
         folder.mkdir(exist_ok=False)
 
-        metadata = self.make_metadata(file, filename, fileid, mimetype)
-        (folder / filename).write_bytes(file)
+        metadata = self.make_metadata(filesize, filename, fileid, mimetype)
+        self.write_stream(file, folder / filename)
         (folder / metadataname).write_text(dumps(metadata))
 
         return metadata
