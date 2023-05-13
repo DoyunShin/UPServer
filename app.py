@@ -16,6 +16,12 @@ storage = getattr(filesystem, config["storage"])(config)
 app = Flask(__name__)
 CORS(app)
 
+if config["proxy"]:
+    from werkzeug.middleware.proxy_fix import ProxyFix
+    app.wsgi_app = ProxyFix(
+        app.wsgi_app, x_for=1, x_proto=1, x_host=1, x_prefix=1
+    )
+
 @app.route('/assets/<path:path>')
 def send_assets(path):
     return send_from_directory(ASSETS_DIR, path)
