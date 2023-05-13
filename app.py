@@ -106,4 +106,4 @@ def error(code: str, msg: str): return STATIC_DIR.joinpath("error.html").read_te
 
 if __name__ == '__main__':
     app.debug = config["debug"]
-    app.run(host=config["host"], threaded=True, port=config["port"])
+    app.run(host=config["host"]["ip"], threaded=True, port=config["host"]["port"])
