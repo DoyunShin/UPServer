@@ -72,7 +72,7 @@ def getf(path):
     fileid = dt[0]
     filename = dt[1]
     try:
-        if config["cdn"]["enabled"]: return redirect(f"{config['cdn']['url']}/{fileid}/{filename}")
+        if config["host"]["cdn"]["enabled"]: return redirect(f"{config['host']['cdn']['url']}/{fileid}/{filename}")
         res = Response(storage.download(fileid, filename))
         res.headers["Content-Type"] = storage.get_mimetype(filename)
         return res
@@ -83,9 +83,10 @@ def getf(path):
 def putf(path):
     if "/" in path: return "Invalid path", 400
     if path[0] == ".": return "Invalid path", 400
-    metadata = storage.save(request.data, path)
     
-    domain = request.host_url
+    metadata = storage.save(request.data, path)
+    domain = config["general"]["domain"] if config["general"]["domain"] else request.host_url
+
     return f"{domain}{metadata['id']}/{metadata['name']}", 200
 
 @app.errorhandler(404)

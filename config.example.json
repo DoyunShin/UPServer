@@ -1,7 +1,15 @@
 {
     "debug": false,
-    "port": 5000,
-    "host": "0.0.0.0",
+    "host": {
+        "ip": "0.0.0.0",
+        "port": 5000,
+        "domain": "https://upload.example.com/",
+        "proxy": false,
+        "cdn": {
+            "enabled": false,
+            "url": "https://upscdn.example.com/"
+        }
+    },
     "general": {
         "name": "Example's Upload",
         "brand": "Somebody",
@@ -38,9 +46,5 @@
     },
     "local": {
         "root": "/path/to/upload/folder"
-    },
-    "cdn": {
-        "enabled": false,
-        "root": "https://upcdn.example.com/"
     }
 }
