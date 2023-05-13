@@ -1,8 +1,29 @@
 {
     "general": {
-        "name": "Doyun's UploadServer",
-        "brand": "Doyun",
-        "icon": "https://www.example.com/favicon.ico"
+        "name": "Example's Upload",
+        "brand": "Somebody",
+        "info": "Working as <strong>Server Admin</strong> developer<br>enrolled in <strong>Example</strong>",
+        "icon": "//example.com/favicon.ico",
+        "contact": "//example.com/contact",
+        "webinfo": [
+            [
+                "Services",
+                ["Service1", "//example.com/service1"],
+                ["Service2", "//example.com/service2"],
+                ["Service3", "//example.com/service3"]
+            ],
+            [
+                "About",
+                ["Me!", "//example.com/about"],
+                ["Github", "//github.com/github"]
+            ],
+            [
+                "Server",
+                ["Server1", "//example.com/server1"],
+                ["Server2", "//example.com/server2"],
+                ["Server3", "//example.com/server3"]
+            ]
+        ]
     },
     "storage": "local | gdrive",
     "folderidlength": 6,
