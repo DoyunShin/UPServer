@@ -133,8 +133,10 @@ class gdrive(storage):
         return list(self.list(dir).keys())
     
     def getid(self, dir: str = None, name: str = None) -> str:
-        return self.list(dir)[name]
-        
+        try:
+            return self.list(dir)[name]
+        except KeyError:
+            raise FileNotFoundError(f"File {name} not found in {dir}")
     
     def mkdir(self, name: str) -> str:
         file_metadata = {
@@ -149,18 +151,19 @@ class gdrive(storage):
         mimetype = self.get_mimetype(filename)
         fileid = self.create_fileid()
         folderid = self.mkdir(fileid)
+        metadataname = filename+".metadata"
 
         file_metadata = {
             'name': filename,
             'parents': [folderid]
         }
         metadata_md = {
-            'name': 'metadata.json',
+            'name': metadataname,
             'parents': [folderid]
         }
         metadata = self.make_metadata(file, filename, fileid, mimetype, folderid)
         thistemp = self.tmpdir.mkid(fileid)
-        metaPath = thistemp / "metadata.json"
+        metaPath = thistemp / metadataname
         filePath = thistemp / filename
 
         metaPath.write_text(dumps(metadata))
@@ -179,7 +182,7 @@ class gdrive(storage):
         if fileid not in self.folderlist():
             raise FileNotFoundError(f"File {filename} not found in {fileid}")
         folderid = self.getid(name=fileid)
-        metadataid = self.getid(dir=folderid, name="metadata.json")
+        metadataid = self.getid(dir=folderid, name=filename+".metadata")
         metadata = loads(self.service.files().get_media(fileId=metadataid).execute())
 
         if metadata["name"] != filename:
@@ -204,19 +207,20 @@ class local(storage):
     def save(self, file: bytes, filename: str) -> dict:
         fileid = self.create_fileid()
         mimetype = self.get_mimetype(filename)
+        metadataname = filename+".metadata"
         folder = self.root / fileid
         folder.mkdir(exist_ok=False)
 
         metadata = self.make_metadata(file, filename, fileid, mimetype)
         (folder / filename).write_bytes(file)
-        #print(metadata)
-        (folder / "metadata.json").write_text(dumps(metadata))
+        (folder / metadataname).write_text(dumps(metadata))
 
         return metadata
     
     def loadmetadata(self, fileid: str, filename: str) -> dict:
         folder = self.root / fileid
-        metadata = loads((folder / "metadata.json").read_text())
+        metadataname = filename+".metadata"
+        metadata = loads((folder / metadataname).read_text())
 
         if metadata["name"] != filename:
             raise FileNotFoundError(f"File {filename} not found in {fileid}")
