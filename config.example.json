@@ -10,5 +10,9 @@
     },
     "local": {
         "root": "/path/to/upload/folder"
+    },
+    "cdn": {
+        "enabled": false,
+        "root": "https://upcdn.example.com/"
     }
 }

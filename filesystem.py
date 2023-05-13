@@ -146,7 +146,7 @@ class gdrive(storage):
         return file.get('id')
 
     def save(self, file: bytes, filename: str) -> dict:
-        mimetype = self.get_mimetype(file)
+        mimetype = self.get_mimetype(filename)
         fileid = self.create_fileid()
         folderid = self.mkdir(fileid)
 
@@ -203,13 +203,13 @@ class local(storage):
 
     def save(self, file: bytes, filename: str) -> dict:
         fileid = self.create_fileid()
-        mimetype = self.get_mimetype(file)
+        mimetype = self.get_mimetype(filename)
         folder = self.root / fileid
         folder.mkdir(exist_ok=False)
 
         metadata = self.make_metadata(file, filename, fileid, mimetype)
         (folder / filename).write_bytes(file)
-        print(metadata)
+        #print(metadata)
         (folder / "metadata.json").write_text(dumps(metadata))
 
         return metadata
