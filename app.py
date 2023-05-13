@@ -22,6 +22,10 @@ if config["proxy"]:
         app.wsgi_app, x_for=1, x_proto=1, x_host=1, x_prefix=1
     )
 
+@app.route('/info')
+def info():
+    return config["general"], 200
+
 @app.route('/assets/<path:path>')
 def send_assets(path):
     return send_from_directory(ASSETS_DIR, path)
@@ -45,7 +49,7 @@ def v1api(path):
 
 @app.route('/<path:path>', methods=['GET'])
 def get(path):
-    if path == "favicon.ico": return abort(404)
+    if path == "favicon.ico": return redirect(config["general"]["icon"])
     if path == "index.html": return redirect("/")
     if path == "robots.txt": return "Disallow: /", 200
     dt = path.split("/")

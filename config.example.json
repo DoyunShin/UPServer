@@ -1,5 +1,9 @@
 {
-    "name": "Doyun's UploadServer",
+    "general": {
+        "name": "Doyun's UploadServer",
+        "brand": "Doyun",
+        "icon": "https://www.example.com/favicon.ico"
+    },
     "storage": "local | gdrive",
     "folderidlength": 6,
     "deletelength": 8,
