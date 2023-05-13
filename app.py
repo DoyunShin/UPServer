@@ -84,7 +84,7 @@ def putf(path):
     if "/" in path: return "Invalid path", 400
     if path[0] == ".": return "Invalid path", 400
     
-    metadata = storage.save(request.data, path)
+    metadata = storage.save(request.stream, request.content_length, path)
     domain = config["host"]["domain"] if config["host"]["domain"] else request.host_url
 
     return f"{domain}{metadata['id']}/{metadata['name']}", 200
