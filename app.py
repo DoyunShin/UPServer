@@ -104,5 +104,5 @@ def E400(e):
 def error(code: str, msg: str): return STATIC_DIR.joinpath("error.html").read_text().replace("StatusCode", code).replace("StatusMessage", msg), int(code)
 
 if __name__ == '__main__':
-    app.debug = True
+    app.debug = config["debug"]
     app.run(host="0.0.0.0", threaded=True, port=8080)
