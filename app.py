@@ -60,6 +60,7 @@ def get(path):
     try:
         if len(fileid) != config["folderidlength"]: return abort(404)
         metadata = storage.loadmetadata(fileid, filename)
+        if "curl" in request.headers.get("User-Agent"): return redirect(f"{config['host']['domain']}get/{metadata['id']}/{metadata['name']}") # curl handler
         return STATIC_DIR.joinpath("item.html").read_text(), 200
 
     except FileNotFoundError:
@@ -102,7 +103,9 @@ def E400(e):
     return error("400", "Bad Request!")
 
 
-def error(code: str, msg: str): return STATIC_DIR.joinpath("error.html").read_text().replace("StatusCode", code).replace("StatusMessage", msg), int(code)
+def error(code: str, msg: str): 
+    if "curl" in request.headers.get("User-Agent"): return f"{code}: {msg}", int(code)
+    return STATIC_DIR.joinpath("error.html").read_text().replace("StatusCode", code).replace("StatusMessage", msg), int(code)
 
 if __name__ == '__main__':
     app.debug = config["debug"]
