@@ -1,5 +1,6 @@
 {
     "debug": false,
+    "storage": "local | gdrive",
     "host": {
         "ip": "0.0.0.0",
         "port": 5000,
@@ -9,6 +10,17 @@
             "enabled": false,
             "url": "https://upscdn.example.com/"
         }
+    },
+    "folderidlength": 6,
+    "deletelength": 8,
+    "chunk": 4096,
+    "gdrive": {
+        "credential" : {},
+        "scopes": ["https://www.googleapis.com/auth/drive"],
+        "root": ""
+    },
+    "local": {
+        "root": "/path/to/upload/folder"
     },
     "general": {
         "name": "Example's Upload",
@@ -35,16 +47,5 @@
                 ["Server3", "//example.com/server3"]
             ]
         ]
-    },
-    "storage": "local | gdrive",
-    "folderidlength": 6,
-    "deletelength": 8,
-    "gdrive": {
-        "credential" : {},
-        "scopes": ["https://www.googleapis.com/auth/drive"],
-        "root": ""
-    },
-    "local": {
-        "root": "/path/to/upload/folder"
     }
 }
