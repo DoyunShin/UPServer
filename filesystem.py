@@ -57,7 +57,7 @@ class storage():
     def default(self, config: dict):
         self.folderidlength = config["folderidlength"]
         self.deletelength = config["deletelength"]
-        self.chunksize = 4096
+        self.chunksize = config["chunk"]
         
 
     def save(self, file, filesize: int, filename: str) -> dict:
