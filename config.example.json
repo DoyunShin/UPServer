@@ -14,7 +14,7 @@
     },
     "folderidlength": 6,
     "deletelength": 8,
-    "chunk": 4096,
+    "chunk": 16777216,
     "gdrive": {
         "credential" : {},
         "scopes": ["https://www.googleapis.com/auth/drive"],
