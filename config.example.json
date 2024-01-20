@@ -9,7 +9,8 @@
         "cdn": {
             "enabled": false,
             "url": "https://upscdn.example.com/"
-        }
+        },
+        "cachetime": 600
     },
     "folderidlength": 6,
     "deletelength": 8,

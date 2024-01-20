@@ -4,14 +4,18 @@ import werkzeug
 from pathlib import Path
 from json import loads
 import filesystem
+import time
 
 BASE_DIR = Path(__file__).resolve().parent
 STATIC_DIR = BASE_DIR / "static"
 ASSETS_DIR = STATIC_DIR / "assets"
 
 config = loads((BASE_DIR / "config.json").read_text())
-storage = getattr(filesystem, config["storage"])(config)
-
+if config["storage"] not in filesystem.storageTypes: 
+    raise ValueError(f"Invalid storage type: {config['storage']}")
+storage: filesystem.storage = getattr(filesystem, config["storage"])(config)
+cache: dict[str, dict] = {}
+# fileid: {time: int, metadata: dict}
 
 app = Flask(__name__)
 CORS(app)
@@ -21,6 +25,31 @@ if config["host"]["proxy"]:
     app.wsgi_app = ProxyFix(
         app.wsgi_app, x_for=1, x_proto=1, x_host=1, x_prefix=1
     )
+
+def store_cache(fileid: str, metadata: dict):
+    cache[fileid] = {"time": int(time.time()), "metadata": metadata}
+
+def get_cache(fileid: str) -> dict | None:
+    if fileid in cache:
+        if cache[fileid]["time"] + config["host"]["cachetime"] > int(time.time()):
+            return cache[fileid]["metadata"]
+        else:
+            cache.pop(fileid)
+    return None
+
+def clear_cache():
+    for fileid in cache:
+        if cache[fileid]["time"] + config["host"]["cachetime"] < int(time.time()):
+            cache.pop(fileid)
+
+def load_metadata(fileid: str, filename: str) -> dict:
+    metadata = get_cache(fileid)
+    if metadata is None:
+        metadata = storage.load_metadata(fileid, filename)
+        metadata.pop("folderid")
+        metadata.pop("delete")
+        store_cache(fileid, metadata)
+    return metadata
 
 @app.route('/info')
 def info():
@@ -42,10 +71,15 @@ def v1api(path):
     filename = dt[1]
 
     try:
-        return storage.loadmetadata(fileid, filename), 200
+        data = load_metadata(fileid, filename)
+        return data, 200
     except FileNotFoundError:
         return abort(404)
 
+@app.route('/api/v1/clearcache')
+def clearcache():
+    clear_cache()
+    return "OK", 200
 
 @app.route('/<path:path>', methods=['GET'])
 def get(path):
@@ -60,7 +94,7 @@ def get(path):
 
     try:
         if len(fileid) != config["folderidlength"]: return abort(404)
-        metadata = storage.loadmetadata(fileid, filename)
+        load_metadata(fileid, filename)
         if "curl" in request.headers.get("User-Agent"): return redirect(f"{config['host']['domain']}get/{metadata['id']}/{metadata['name']}") # curl handler
         return STATIC_DIR.joinpath("item.html").read_text(), 200
 
@@ -75,9 +109,10 @@ def getf(path):
     filename = dt[1]
     try:
         if config["host"]["cdn"]["enabled"]: return redirect(f"{config['host']['cdn']['url']}/{fileid}/{filename}")
-        res = Response(storage.download(fileid, filename))
-        res.headers["Content-Type"] = storage.get_mimetype(filename)
-        return res
+        return storage.download(fileid, filename)
+        #res = Response(storage.download(fileid, filename))
+        #res.headers["Content-Type"] = storage.get_mimetype(filename)
+        #return res
     except FileNotFoundError:
         return abort(404)
 
