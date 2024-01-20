@@ -29,7 +29,7 @@ if config["host"]["proxy"]:
 def store_cache(fileid: str, metadata: dict):
     cache[fileid] = {"time": int(time.time()), "metadata": metadata}
 
-def get_cache(fileid: str) -> dict | None:
+def get_cache(fileid: str) -> dict:
     if fileid in cache:
         if cache[fileid]["time"] + config["host"]["cachetime"] > int(time.time()):
             return cache[fileid]["metadata"]
