@@ -27,7 +27,7 @@ class storage():
 
         return fileid, mimetype, metadataname
 
-    def save(self, file: LimitedStream, filesize: int, filename: str) -> dict[str, str | int | bool]:
+    def save(self, file: LimitedStream, filesize: int, filename: str) -> dict:
         pass
 
     def load_metadata(self, fileid: str, filename: str) -> dict:
@@ -51,7 +51,7 @@ class storage():
             return self.create_fileid()
         return folderid
 
-    def make_metadata(self, filesize: int, filename: str, fileid: str, mimetype: str, folderid: str = None) -> dict[str, str | int | bool]:
+    def make_metadata(self, filesize: int, filename: str, fileid: str, mimetype: str, folderid: str = None) -> dict:
         return {
             "id": fileid,
             "name": filename,
@@ -177,7 +177,7 @@ class gdrive(storage):
         }
         return self.upload(file_metadata)
 
-    def save(self, file: LimitedStream, filesize: int, filename: str) -> dict[str, str | int | bool]:
+    def save(self, file: LimitedStream, filesize: int, filename: str) -> dict:
         fileid, mimetype, metadataname = self._save(filename)
         folderid = self.mkdir(fileid)
 
@@ -208,7 +208,7 @@ class gdrive(storage):
         if f"{filename}.metadata" not in folderList: 
             raise FileNotFoundError(f"File id {fileid} or name {filename} not found")
         
-        metadata: dict[str, str | int | bool] = loads(self.service.files().get_media(fileId=folderList[f"{filename}.metadata"]).execute().decode("utf-8"))
+        metadata: dict = loads(self.service.files().get_media(fileId=folderList[f"{filename}.metadata"]).execute().decode("utf-8"))
         
         if metadata["name"] != filename:
             raise FileNotFoundError(f"File id {fileid} or name {filename} not found")
@@ -253,7 +253,7 @@ class local(storage):
 
         return metadata
     
-    def load_metadata(self, fileid: str, filename: str) -> dict[str, str | int | bool]:
+    def load_metadata(self, fileid: str, filename: str) -> dict:
         folderPath = self.root / fileid
         if not folderPath.exists(): 
             raise FileNotFoundError(f"File id {fileid} or name {filename} not found")
