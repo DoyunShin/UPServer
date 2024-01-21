@@ -94,9 +94,8 @@ class gdrive(storage):
             self._begin = begin
             self._chunksize = chunksize
 
-            if chunksize != -1 and chunksize < 262144:
-                from googleapiclient.errors import InvalidChunkSizeError
-                raise InvalidChunkSizeError()
+            if chunksize != 1 and chunksize < 262144:
+                chunksize = 262144
 
         def read(self, n=-1):
             """Read n bytes.
