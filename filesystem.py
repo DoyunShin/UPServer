@@ -1,6 +1,5 @@
 from pathlib import Path
 from json import loads, dumps
-from typing import IO
 from flask import Response, send_file
 from mimetypes import guess_type
 from werkzeug.wsgi import LimitedStream
@@ -72,6 +71,7 @@ class storage():
 class gdrive(storage):
     from googleapiclient.http import MediaFileUpload, MediaIoBaseUpload
     import googleapiclient.http
+
     class _UPSStreamSlice(object):
         """Truncated stream.
 
@@ -82,7 +82,7 @@ class gdrive(storage):
         wrapper presents a virtual stream that only reads to the end of the chunk.
         """
 
-        def __init__(self, stream, begin, chunksize):
+        def __init__(self, stream: LimitedStream, begin, chunksize):
             """Constructor.
 
             Args:
@@ -93,6 +93,10 @@ class gdrive(storage):
             self._stream = stream
             self._begin = begin
             self._chunksize = chunksize
+
+            if chunksize != -1 and chunksize < 262144:
+                from googleapiclient.errors import InvalidChunkSizeError
+                raise InvalidChunkSizeError()
 
         def read(self, n=-1):
             """Read n bytes.
@@ -123,7 +127,6 @@ class gdrive(storage):
                 raise InvalidChunkSizeError()
             self._chunksize = chunksize
             self._resumable = resumable
-
             self._size = size
 
     
@@ -192,7 +195,7 @@ class gdrive(storage):
         metadata = self.make_metadata(filesize, filename, fileid, mimetype, folderid)
         metadataIO = BytesIO(dumps(metadata, ensure_ascii=False).encode("utf-8"))
 
-        media = self.UPSMediaIoStreamUpload(file, mimetype, filesize, chunksize=self.chunksize, resumable=True)
+        media = self.UPSMediaIoStreamUpload(file, mimetype, filesize, chunksize=filesize, resumable=True)
         mtdata = self.MediaIoBaseUpload(metadataIO, mimetype="application/json")
         self.upload(file_info, media)
         self.upload(file_metadata_info, mtdata)
