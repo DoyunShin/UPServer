@@ -94,7 +94,7 @@ def get(path):
 
     try:
         if len(fileid) != config["folderidlength"]: return abort(404)
-        load_metadata(fileid, filename)
+        metadata = load_metadata(fileid, filename)
         if "curl" in request.headers.get("User-Agent"): return redirect(f"{config['host']['domain']}get/{metadata['id']}/{metadata['name']}") # curl handler
         return STATIC_DIR.joinpath("item.html").read_text(), 200
 
@@ -108,11 +108,10 @@ def getf(path):
     fileid = dt[0]
     filename = dt[1]
     try:
-        if config["host"]["cdn"]["enabled"]: return redirect(f"{config['host']['cdn']['url']}/{fileid}/{filename}")
+        redirect_url = config['host']['cdn']['url']
+        redirect_url = redirect_url[:-1] if redirect_url[-1] == "/" else redirect_url
+        if config["host"]["cdn"]["enabled"]: return redirect(f"{redirect_url}/{fileid}/{filename}")
         return storage.download(fileid, filename)
-        #res = Response(storage.download(fileid, filename))
-        #res.headers["Content-Type"] = storage.get_mimetype(filename)
-        #return res
     except FileNotFoundError:
         return abort(404)
 
@@ -122,6 +121,7 @@ def putf(path):
     if path[0] == ".": return "Invalid path", 400
     
     metadata = storage.save(request.stream, request.content_length, path)
+    store_cache(metadata["id"], metadata)
     domain = config["host"]["domain"] if config["host"]["domain"] else request.host_url
 
     return f"{domain}{metadata['id']}/{metadata['name']}", 200
