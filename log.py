@@ -12,6 +12,7 @@ def setup(name: str, debug: bool = False):
     Setup a logger with the given name.
     """
     global logger
+    wzlogger = logging.getLogger('werkzeug')
     logger = logging.getLogger(name)
     if debug:
         logger.setLevel(logging.DEBUG)

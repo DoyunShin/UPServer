@@ -15,7 +15,7 @@
     "folderidlength": 6,
     "deletelength": 8,
     "chunk": 104857600,
-    "log": "/path/to/logfile.log",
+    "log": "",
     "gdrive": {
         "credential" : {},
         "scopes": ["https://www.googleapis.com/auth/drive"],
