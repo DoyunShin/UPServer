@@ -19,7 +19,8 @@
     "gdrive": {
         "credential" : {},
         "scopes": ["https://www.googleapis.com/auth/drive"],
-        "root": ""
+        "root": "",
+        "cache": false
     },
     "local": {
         "root": "/path/to/upload/folder"
