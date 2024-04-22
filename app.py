@@ -1,4 +1,4 @@
-from flask import Flask, request, send_from_directory, abort, Response, redirect, jsonify
+from flask import Flask, request, send_from_directory, abort, Response, redirect, jsonify, send_file
 from flask_cors import CORS
 import werkzeug
 from pathlib import Path
@@ -104,11 +104,11 @@ def get(path):
     fileid = dt[0]
     filename = dt[1]
     if fileid == "ye" and filename == "hello.gif": return STATIC_DIR.joinpath("item.html").read_text(), 200
+    if "curl" in request.headers.get("User-Agent"): return getf(path)
 
     try:
         if len(fileid) != config["folderidlength"]: return abort(404)
         metadata = load_metadata(fileid, filename)
-        if "curl" in request.headers.get("User-Agent"): return redirect(f"{config['host']['domain']}get/{metadata['id']}/{metadata['name']}") # curl handler
         return STATIC_DIR.joinpath("item.html").read_text(), 200
 
     except FileNotFoundError:
@@ -122,7 +122,9 @@ def getf(path):
     fileid = dt[0]
     filename = dt[1]
     try:
-        if config["host"]["cdn"]["enabled"]: 
+        if storage.cache and storage.is_cached(fileid, filename):
+            return send_file(storage.get_cached(fileid, filename))
+        if config["host"]["cdn"]["enabled"]:
             redirect_url = config['host']['cdn']['url']
             redirect_url = redirect_url[:-1] if redirect_url[-1] == "/" else redirect_url
             return redirect(f"{redirect_url}/{fileid}/{filename}")
@@ -166,4 +168,4 @@ def error(code: str, msg: str):
 if __name__ == '__main__':
     load_config()
     app.debug = config["debug"]
-    app.run(host=config["host"]["ip"], threaded=True, port=config["host"]["port"])
+    app.run(host=config["host"]["ip"], port=config["host"]["port"])
