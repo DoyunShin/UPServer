@@ -1,0 +1,59 @@
+{
+    "debug": true,
+    "storage": "local",
+    "host": {
+        "ip": "0.0.0.0",
+        "port": 5000,
+        "domain": "https://upload.example.com/",
+        "proxy": false,
+        "cdn": {
+            "enabled": false,
+            "url": "https://upscdn.example.com/"
+        },
+        "cachetime": 600
+    },
+    "delete": {
+        "enabled": true,
+        "after": 3600,
+        "permanently": false
+    },
+    "folderidlength": 6,
+    "deletelength": 8,
+    "chunk": 104857600,
+    "log": "",
+    "gdrive": {
+        "credential" : {},
+        "scopes": ["https://www.googleapis.com/auth/drive"],
+        "root": "",
+        "cache": false
+    },
+    "local": {
+        "root": "./uploads/"
+    },
+    "general": {
+        "name": "Example's Upload",
+        "brand": "Somebody",
+        "info": "Working as <strong>Server Admin</strong> developer<br>enrolled in <strong>Example</strong>",
+        "icon": "//example.com/favicon.ico",
+        "contact": "//example.com/contact",
+        "webinfo": [
+            [
+                "Services",
+                ["Service1", "//example.com/service1"],
+                ["Service2", "//example.com/service2"],
+                ["Service3", "//example.com/service3"]
+            ],
+            [
+                "About",
+                ["Me!", "//example.com/about"],
+                ["Github", "//github.com/github"]
+            ],
+            [
+                "Server",
+                ["Server1", "//example.com/server1"],
+                ["Server2", "//example.com/server2"],
+                ["Server3", "//example.com/server3"]
+            ]
+        ]
+    }
+}
