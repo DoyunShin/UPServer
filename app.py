@@ -42,8 +42,8 @@ def load_config():
 def store_cache(metadata: filesystem.Metadata):
     cache[metadata.id] = {"time": int(time.time()), "metadata": metadata}
 
-def get_cache(fileid: str) -> filesystem.Metadata:
-    if fileid in cache:
+def get_cache(fileid: str, filename: str) -> filesystem.Metadata:
+    if fileid in cache and filename == cache[fileid]["metadata"].name:
         if cache[fileid]["time"] + config["host"]["cachetime"] > int(time.time()):
             return cache[fileid]["metadata"]
         else:
@@ -56,7 +56,7 @@ def clear_cache():
             cache.pop(fileid)
 
 def load_metadata(fileid: str, filename: str):
-    metadata = get_cache(fileid)
+    metadata = get_cache(fileid, filename)
     if metadata is None:
         metadata = storage.load_metadata(fileid, filename)
         metadata.folderid = None

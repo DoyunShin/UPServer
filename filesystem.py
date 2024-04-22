@@ -6,6 +6,7 @@ from werkzeug.wsgi import LimitedStream
 from io import BytesIO
 import string
 import random
+import time
 
 storageTypes = ["gdrive", "local"]
 
@@ -17,6 +18,8 @@ class Metadata:
     folderid: str
     delete: str
     hidden: bool
+    created_at: int
+    delete_after: int
 
     def to_dict(self, public: bool = False):
         data = {
@@ -25,6 +28,8 @@ class Metadata:
             "mimeType": self.mimeType,
             "size": self.size,
             "hidden": self.hidden,
+            "created_at": self.created_at,
+            "delete_after": self.delete_after
         }
 
         if not public:
@@ -44,7 +49,9 @@ class Metadata:
             self.size = data["size"]
             self.folderid = data["folderid"]
             self.delete = data["delete"]
-            self.hidden = data["hidden"]
+            self.hidden = data["hidden"] if "hidden" in data else False
+            self.created_at = data["created_at"] if "created_at" in data else int(time.time())
+            self.delete_after = data["delete_after"] if "delete_after" in data else None
         
         elif dataPath:
             data = loads(dataPath.read_text())
@@ -59,6 +66,16 @@ class storage():
         self.folderidlength = config["folderidlength"]
         self.deletelength = config["deletelength"]
         self.chunksize = config["chunk"]
+        
+        if "delete" in config:
+            self.delete_rule = config["delete"]
+        else:
+            self.delete_rule = {
+                "enabled": False,
+                "after": 3600,
+                "permanently": False
+            }
+            configPath.write_text(dumps(config, ensure_ascii=False, indent=4))
 
     def _save(self, filename: str, fileid: str = None):
         if not fileid:
@@ -74,6 +91,18 @@ class storage():
     def download(self, fileid: str, filename: str) -> Response: ...
     def get_list(self, path, dir) -> list: ...
     def is_fid_exists(self, fileid: str) -> bool: ...
+
+    def _config_check(self, config: dict, configPath: Path) -> dict:
+        if "delete" not in config:
+            config["delete"] = {
+                "enabled": False,
+                "after": 3600,
+                "permanently": False
+            }
+            configPath.write_text(dumps(config, ensure_ascii=False, indent=4))
+
+        return config
+
 
     def _create_id(self, length: int) -> str:
         return ''.join(random.choices(string.ascii_letters+ string.digits, k=length))
@@ -93,6 +122,8 @@ class storage():
         metadata.folderid = folderid
         metadata.delete = self._create_id(self.deletelength)
         metadata.hidden = False
+        metadata.created_at = int(time.time())
+        metadata.delete_after = self.delete_rule["after"]
         return metadata
     
     def write_stream(self, stream: LimitedStream, path: Path):
@@ -162,7 +193,6 @@ class gdrive(storage):
             self._resumable = resumable
             self._size = size
 
-    
     del(googleapiclient.http._StreamSlice)
     googleapiclient.http._StreamSlice = _UPSStreamSlice
 
@@ -178,7 +208,12 @@ class gdrive(storage):
         self.cache: bool = config["gdrive"]["cache"]
         self.cachequeue = []
 
-    def _config_check(config: dict, configPath: Path):
+    def _setup_cache(self):
+        self.cacheControl = local({"local": {"root": "cache"}}, Path("cache.json"))
+
+
+    def _config_check(self, config: dict, configPath: Path):
+        config = super()._config_check(config, configPath)
         if not config["gdrive"]["root"]:
             raise ValueError("Google drive root is not defined.")
         if "cache" not in config["gdrive"]:
@@ -338,7 +373,7 @@ class local(storage):
 
         return metadata
     
-    def remove(self, fileid: str, filename: str, deletepass: str, force: bool = False):
+    def remove(self, fileid: str, filename: str, deletepass: str, force: bool = False, permanently: bool = False):
         try:
             metadata = self.load_metadata(fileid, filename)
         except FileNotFoundError:
@@ -346,6 +381,9 @@ class local(storage):
         
         if metadata.delete != deletepass and not force:
             return False
+        
+        if permanently:
+            return self._remove_permanent(fileid, filename)
         
         deleteFolder = self.root / "delete"
         deleteFolder.mkdir(exist_ok=True)
@@ -393,3 +431,12 @@ class local(storage):
         metadata = self.load_metadata(fileid, filename)
         return send_file(self.root / fileid / filename, mimetype=metadata.mimeType)
         #return (folder / metadata["name"]).read_bytes()
+
+    def get_filepath(self, fileid: str, filename: str) -> Path:
+        try:
+            metadata = self.load_metadata(fileid, filename)
+        except FileNotFoundError:
+            return None
+
+        return self.root / fileid / filename
+        

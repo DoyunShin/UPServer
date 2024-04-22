@@ -12,6 +12,11 @@
         },
         "cachetime": 600
     },
+    "delete": {
+        "enabled": true,
+        "after": 3600,
+        "permanently": false
+    },
     "folderidlength": 6,
     "deletelength": 8,
     "chunk": 104857600,
