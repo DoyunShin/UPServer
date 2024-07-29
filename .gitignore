@@ -132,3 +132,4 @@ dmypy.json
 config.json
 uploads/
 gdrive.py
+app.wsgi
