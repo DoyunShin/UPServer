@@ -103,7 +103,7 @@ def get(path):
     if len(dt) > 2: return abort(404)
     fileid = dt[0]
     filename = dt[1]
-    if fileid == "ye" and filename == "hello.gif": return STATIC_DIR.joinpath("item.html").read_text(), 200
+    # if fileid == "ye" and filename == "hello.gif": return STATIC_DIR.joinpath("item.html").read_text(), 200
     if "curl" in request.headers.get("User-Agent"): return getf(path)
 
     try:
