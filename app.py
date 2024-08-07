@@ -39,6 +39,10 @@ def load_config():
             app.wsgi_app, x_for=1, x_proto=1, x_host=1, x_prefix=1
         )
 
+def check_config():
+    if not config:
+        load_config()
+
 def store_cache(metadata: filesystem.Metadata):
     cache[metadata.id] = {"time": int(time.time()), "metadata": metadata}
 
@@ -63,6 +67,10 @@ def load_metadata(fileid: str, filename: str):
         metadata.delete = None
         store_cache(metadata)
     return metadata
+
+@app.before_request
+def before_request():
+    check_config()
 
 @app.route('/info')
 def info():
