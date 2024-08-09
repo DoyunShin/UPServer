@@ -456,7 +456,11 @@ class local(storage):
     def __init__(self, config: dict, configPath: Path):
         super().__init__(config, configPath)
         
-        root = Path(config["local"]["root"])
+        rootstr = config["local"]["root"]
+        if rootstr.startswith("./"):
+            rootstr = Path(__file__).parent / rootstr[2:]
+
+        root = Path(rootstr)
         root.mkdir(exist_ok=True, parents=True)
         self.root = root.resolve()
         self.cache = False

@@ -25,8 +25,7 @@ def load_config():
         configPath = BASE_DIR / "config.json"
 
     if not configPath.exists():
-        print("Config file not found!")
-        exit(-1)
+        raise FileNotFoundError("Config file not found!")
 
     config = loads(configPath.read_text())
     if config["storage"] not in filesystem.storageTypes: 
