@@ -459,6 +459,9 @@ class local(storage):
         rootstr = config["local"]["root"]
         if rootstr.startswith("./"):
             rootstr = Path(__file__).parent / rootstr[2:]
+        elif not rootstr.startswith("/"):
+            rootstr = Path(__file__).parent / rootstr
+            
 
         root = Path(rootstr)
         root.mkdir(exist_ok=True, parents=True)
