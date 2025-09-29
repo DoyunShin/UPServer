@@ -5,6 +5,7 @@ from mimetypes import guess_type
 from werkzeug.wsgi import LimitedStream
 from threading import Thread
 from io import BytesIO
+from typing import IO
 import string
 import random
 import time
@@ -18,8 +19,11 @@ class Metadata:
     size: int
     delete: str
     hidden: bool
-    created_at: int
-    delete_after: int
+    created_at: float
+    delete_after: float
+
+    optional_parentfolderID: str
+    optional_gfileID: str
 
     def to_dict(self, public: bool = False):
         data = {
@@ -40,23 +44,27 @@ class Metadata:
     def to_json(self, ensure_ascii: bool = False, indent: int = 0, public: bool = False):
         return dumps(self.to_dict(public=public), ensure_ascii=ensure_ascii, indent=indent)
     
-    def load(self, data: dict = None, dataraw: str = None, dataPath: Path = None):
-        if dataraw:
-            data = loads(dataraw)
-
+    def load(self, data: dict = {}, dataraw: str = "", dataPath: Path = Path()):
         if data:
-            self.id = data["id"]
-            self.name = data["name"]
+            self.id = str(data["id"])
+            self.name = str(data["name"])
             self.mimeType = data["mimeType"]
-            self.size = data["size"]
-            self.delete = data["delete"]
-            self.hidden = data["hidden"] if "hidden" in data else False
-            self.created_at = data["created_at"] if "created_at" in data else int(time.time())
-            self.delete_after = data["delete_after"] if "delete_after" in data else None
+            self.size = int(data["size"])
+            self.delete = str(data["delete"])
+            self.hidden = bool(data["hidden"] if "hidden" in data else False)
+            self.created_at = float(data["created_at"] if "created_at" in data else int(time.time()))
+            self.delete_after = float(data["delete_after"] if "delete_after" in data else -1)
+            return
+        
+        elif dataraw:
+            data = loads(dataraw)
         
         elif dataPath:
             data = loads(dataPath.read_text())
             self.load(data)
+        
+        else:
+            raise ValueError("No data provided")
 
 class storage():
     folderidlength: int
@@ -79,7 +87,7 @@ class storage():
             }
             configPath.write_text(dumps(config, ensure_ascii=False, indent=4))
 
-    def _save(self, filename: str, fileid: str = None):
+    def _save(self, filename: str, fileid: str = ""):
         if not fileid:
             fileid = self.create_fileid()
         mimetype = guess_type(filename)[0] or "application/octet-stream"
@@ -88,13 +96,13 @@ class storage():
         return fileid, mimetype, metadataname
     
     def remove(self, fileid: str, filename: str, deletepass: str, force: bool = False): ...
-    def save(self, file: LimitedStream, filesize: int, filename: str, fileid: str = None) -> Metadata: ...
+    def save(self, file: LimitedStream | IO[bytes], filesize: int | None, filename: str, fileid: str = "") -> Metadata: ...
     def load_metadata(self, fileid: str, filename: str) -> Metadata: ...
     def download(self, fileid: str, filename: str) -> Response: ...
-    def get_list(self, path, dir) -> list: ...
+    def get_list(self, path, dir) -> list[str]: ...
     def is_fid_exists(self, fileid: str) -> bool: ...
     def is_cached(self, fileid: str, filename: str) -> bool: return False
-    def get_cached(self, fileid: str, filename: str) -> Path: return None
+    def get_cached(self, fileid: str, filename: str) -> Path: raise FileNotFoundError(f"Cache file not found: {fileid} {filename}")
 
     def _config_check(self, config: dict, configPath: Path) -> dict:
         if "delete" not in config:
@@ -207,8 +215,8 @@ class gdrive(storage):
         from google.oauth2 import service_account
         self.credential = service_account.Credentials.from_service_account_info(config["gdrive"]["credential"], scopes=config["gdrive"]["scopes"])
         self.service = build('drive', 'v3', credentials=self.credential)
-        self.root: str = config["gdrive"]["root"]
-        self.cache: bool = config["gdrive"]["cache"]
+        self.root: str = str(config["gdrive"]["root"])
+        self.cache: bool = bool(config["gdrive"]["cache"])
         if self.cache:
             print("Cache setup")
             self._cache_setup(config)
@@ -233,7 +241,7 @@ class gdrive(storage):
         cache_config["local"] = {"root": "cache"}
         self.cacheControl = local(cache_config, Path("cache.json"))
         self.cachequeue = []
-        self.cachequeueID = {}
+        self.cachequeueID: dict[str, dict[str, str|dict[str,str]|Metadata]] = {}
 
         self.cacheThread = Thread(target=self._cache_worker, daemon=True)
         self.cacheThread.start()
@@ -242,7 +250,7 @@ class gdrive(storage):
         g_files = self.get_list(dir=self.root, mimeType="application/vnd.google-apps.folder")
 
         for fileid in self.cacheControl.get_list(self.cacheControl.root, dir=True):
-            filename = None
+            filename: str | None = None
             for file in self.cacheControl.get_list(self.cacheControl.root / fileid):
                 if not file.endswith(".metadata"):
                     filename = file
@@ -271,9 +279,22 @@ class gdrive(storage):
                 continue
 
             fileid = self.cachequeue.pop(0)
-            metadata: Metadata = self.cachequeueID[fileid]["metadata"]
-            file_info: dict = self.cachequeueID[fileid]["file_info"]
-            file_metadata_info: dict = self.cachequeueID[fileid]["file_metadata_info"]
+            # metadata: Metadata = self.cachequeueID[fileid]["metadata"]
+
+            raw_metadata = self.cachequeueID.get(fileid, {}).get("metadata")
+            raw_info = self.cachequeueID.get(fileid, {}).get("file_info")
+            raw_metadata_info = self.cachequeueID.get(fileid, {}).get("file_metadata_info")
+
+            metadata: Metadata
+            file_info: dict
+            file_metadata_info: dict
+
+            if isinstance(raw_metadata, Metadata): metadata = raw_metadata
+            else: continue
+            if isinstance(raw_info, dict): file_info = raw_info
+            else: continue
+            if isinstance(raw_metadata_info, dict): file_metadata_info = raw_metadata_info
+            else: continue
 
             filePath = self.cacheControl.get_file_path(metadata.id, metadata.name)
             metadataPath = self.cacheControl.get_file_path(metadata.id, metadata.name, metadata=True)
@@ -288,10 +309,13 @@ class gdrive(storage):
     def get_cached(self, fileid: str, filename: str) -> Path:
         if self.cache and fileid in self.cachequeueID:
             return self.cacheControl.get_file_path(fileid, filename)
-        return None
+        raise FileNotFoundError(f"Cache file not found: {fileid} {filename}")
 
-    def is_cached(self, fileid: str, filename: str) -> Path:
-        return self.cache and fileid in self.cachequeueID and filename == self.cachequeueID[fileid]["metadata"].name
+    def is_cached(self, fileid: str, filename: str) -> bool:
+        metadata = self.cachequeueID.get(fileid, {}).get("metadata", None)
+        if isinstance(metadata, Metadata):
+            return self.cache and fileid in self.cachequeueID and filename == metadata.name
+        return False
 
     def _config_check(self, config: dict, configPath: Path):
         config = super()._config_check(config, configPath)
@@ -349,7 +373,7 @@ class gdrive(storage):
 
         return True
         
-    def get_list(self, dir: str, mimeType: str = None) -> dict[str, str]:
+    def get_list(self, dir: str, mimeType: str = "") -> dict[str, str]:
         """
         Return:
             dict[name, gid]
@@ -381,7 +405,7 @@ class gdrive(storage):
         }
         return self.upload(file_metadata)
 
-    def save(self, file: LimitedStream, filesize: int, filename: str, fileid: str = None) -> Metadata:
+    def save(self, file: LimitedStream, filesize: int, filename: str, fileid: str = "") -> Metadata:
         fileid, mimetype, metadataname = self._save(filename, fileid)
         parentFolderID = self.mkdir(fileid)
         metadata = self.make_metadata(filesize, filename, fileid, mimetype)
@@ -423,7 +447,9 @@ class gdrive(storage):
 
     def load_metadata(self, fileid: str, filename: str) -> Metadata:
         if self.cache and fileid in self.cachequeueID:
-            metadata = self.cachequeueID[fileid]["metadata"]
+            raw_metadata = self.cachequeueID.get(fileid, {}).get("metadata")
+            if isinstance(raw_metadata, Metadata): metadata = raw_metadata
+            else: raise TypeError("Invalid metadata type")
         else:
             rootList = self.get_list(dir=self.root, mimeType="application/vnd.google-apps.folder")
             if fileid not in rootList:
@@ -467,8 +493,8 @@ class local(storage):
         root.mkdir(exist_ok=True, parents=True)
         self.root = root.resolve()
         self.cache = False
-    
-    def get_list(self, path: Path, dir: bool = False) -> list:
+
+    def get_list(self, path: Path, dir: bool = False) -> list[str]:
         if dir:
             return [f.name for f in path.iterdir() if f.is_dir()]
         else:
@@ -477,7 +503,7 @@ class local(storage):
     def is_fid_exists(self, fileid: str) -> bool:
         return (self.root / fileid).exists()
 
-    def save(self, file: LimitedStream, filesize: int, filename: str, fileid: str = None) -> Metadata:
+    def save(self, file: LimitedStream, filesize: int, filename: str, fileid: str = "") -> Metadata:
         fileid, mimetype, metadataname = self._save(filename, fileid)
         folder = self.root / fileid
         folder.mkdir(exist_ok=False)
@@ -548,10 +574,7 @@ class local(storage):
         #return (folder / metadata["name"]).read_bytes()
 
     def get_file_path(self, fileid: str, filename: str, metadata: bool = False) -> Path:
-        try:
-            self.load_metadata(fileid, filename)
-        except FileNotFoundError:
-            return None
+        self.load_metadata(fileid, filename)
 
         if metadata:
             return self.root / fileid / f"{filename}.metadata"
