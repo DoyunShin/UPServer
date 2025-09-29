@@ -10,9 +10,10 @@ BASE_DIR = Path(__file__).resolve().parent
 STATIC_DIR = BASE_DIR / "static"
 ASSETS_DIR = STATIC_DIR / "assets"
 
-configPath: Path = None
-config: dict = None
-storage: filesystem.storage = None
+configInitalize: bool = False
+configPath: Path | None = None
+config: dict = {}
+storage: filesystem.storage
 cache: dict[str, dict] = {}
 # fileid: {time: int, metadata: dict}
 
@@ -20,7 +21,7 @@ app = Flask(__name__)
 CORS(app)
 
 def load_config():
-    global storage, app, config, configPath
+    global storage, app, config, configPath, configInitalize
     if not configPath:
         configPath = BASE_DIR / "config.json"
 
@@ -45,7 +46,7 @@ def check_config():
 def store_cache(metadata: filesystem.Metadata):
     cache[metadata.id] = {"time": int(time.time()), "metadata": metadata}
 
-def get_cache(fileid: str, filename: str) -> filesystem.Metadata:
+def get_cache(fileid: str, filename: str) -> filesystem.Metadata | None:
     if fileid in cache and filename == cache[fileid]["metadata"].name:
         if cache[fileid]["time"] + config["host"]["cachetime"] > int(time.time()):
             return cache[fileid]["metadata"]
@@ -62,8 +63,7 @@ def load_metadata(fileid: str, filename: str):
     metadata = get_cache(fileid, filename)
     if metadata is None:
         metadata = storage.load_metadata(fileid, filename)
-        metadata.folderid = None
-        metadata.delete = None
+        metadata.delete = ""
         store_cache(metadata)
     return metadata
 
@@ -111,7 +111,7 @@ def get(path):
     fileid = dt[0]
     filename = dt[1]
     # if fileid == "ye" and filename == "hello.gif": return STATIC_DIR.joinpath("item.html").read_text(), 200
-    if "curl" in request.headers.get("User-Agent"): return getf(path)
+    if "curl" in request.headers.get("User-Agent", ""): return getf(path)
 
     try:
         if len(fileid) != config["folderidlength"]: return abort(404)
@@ -169,7 +169,7 @@ def E400(e):
 
 
 def error(code: str, msg: str): 
-    if "curl" in request.headers.get("User-Agent"): return f"{code}: {msg}", int(code)
+    if "curl" in request.headers.get("User-Agent", ""): return f"{code}: {msg}", int(code)
     return STATIC_DIR.joinpath("error.html").read_text().replace("StatusCode", code).replace("StatusMessage", msg), int(code)
 
 if __name__ == '__main__':
