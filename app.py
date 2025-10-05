@@ -1,6 +1,5 @@
 from flask import Flask, request, send_from_directory, abort, Response, redirect, jsonify, send_file
 from flask_cors import CORS
-import werkzeug
 from pathlib import Path
 from json import loads
 import filesystem
