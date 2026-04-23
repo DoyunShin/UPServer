@@ -13,6 +13,13 @@ import oryups.main as main_module
 from oryups.main import app
 from oryups.services import cache
 
+try:
+    import uvloop as _uvloop  # noqa: F401
+
+    _TESTCLIENT_BACKEND_OPTIONS: dict[str, Any] = {"use_uvloop": True}
+except ImportError:
+    _TESTCLIENT_BACKEND_OPTIONS = {}
+
 
 @pytest.fixture()
 def test_config(tmp_path: Path) -> Generator[dict[str, Any], None, None]:
@@ -68,7 +75,7 @@ def client(
     monkeypatch.setattr(config_module, "load_config", _noop_load_config)
     monkeypatch.setattr(main_module, "load_config", _noop_load_config)
 
-    with TestClient(app, backend_options={"use_uvloop": True}) as test_client:
+    with TestClient(app, backend_options=_TESTCLIENT_BACKEND_OPTIONS) as test_client:
         yield test_client
 
 

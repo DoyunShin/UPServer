@@ -1,6 +1,7 @@
 import secrets
 
 from fastapi import APIRouter, Header, HTTPException
+from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import JSONResponse
 
 from oryups.config import get_config
@@ -137,7 +138,7 @@ async def get_metadata(fileid: str, filename: str) -> JSONResponse:
     validate_fileid(fileid, folder_length)
     validate_filename_for_read(filename)
     try:
-        metadata = cache.load_metadata(fileid, filename)
+        metadata = await run_in_threadpool(cache.load_metadata, fileid, filename)
     except FileNotFoundError:
         raise HTTPException(status_code=404, detail="Not Found!")
     return make_response(200, "OK", metadata.to_dict())

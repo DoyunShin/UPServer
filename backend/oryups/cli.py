@@ -1,9 +1,10 @@
 import argparse
 import os
-from json import loads
 from pathlib import Path
 
 import uvicorn
+
+from oryups.config import load_config
 
 BASE_DIR: Path = Path(__file__).resolve().parents[1]
 
@@ -40,7 +41,11 @@ def main() -> None:
 
     os.environ["UPSERVER_CONFIG"] = str(config_path)
 
-    config = loads(config_path.read_text())
+    # Single authoritative read. The FastAPI lifespan's ``load_config()`` call
+    # will reuse the cached dict instead of re-parsing the file, avoiding TOCTOU
+    # between the CLI read and the app startup read (the app runs in-process
+    # with the CLI when --workers is unset and --reload is off).
+    config = load_config(path=config_path)
     host_cfg = config["host"]
     proxy_enabled = bool(host_cfg.get("proxy", False))
     forwarded_allow_ips = host_cfg.get("proxy_trusted_hosts", "127.0.0.1")

@@ -28,6 +28,12 @@ def _resolve_config_path(path: Optional[Path]) -> Path:
 def load_config(path: Optional[Path] = None) -> dict:
     """Load UPServer configuration and initialize the storage backend.
 
+    Idempotent when called without an explicit ``path``: if the config has
+    already been loaded (for example by the ``ups`` CLI before uvicorn
+    started), a subsequent call from the app lifespan returns the cached
+    dict instead of re-reading the file. Pass an explicit ``path`` to force
+    a reload against a different file.
+
     Args:
         path(pathlib.Path, optional): Explicit config.json path. If not given,
             falls back to the ``UPSERVER_CONFIG`` environment variable and
@@ -37,6 +43,9 @@ def load_config(path: Optional[Path] = None) -> dict:
         config(dict): Parsed configuration dict.
     """
     global _config, _config_path, _storage
+
+    if path is None and _config:
+        return _config
 
     _config_path = _resolve_config_path(path)
     if not _config_path.exists():

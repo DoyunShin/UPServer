@@ -1,4 +1,5 @@
-from io import BytesIO
+import io
+from typing import AsyncIterator
 from urllib.parse import urlparse
 
 from fastapi import APIRouter, HTTPException, Request
@@ -21,6 +22,7 @@ from oryups.utils.validation import (
 )
 
 DEFAULT_MAX_UPLOAD_SIZE: int = 1 << 30
+GDRIVE_STREAM_CHUNK: int = 8 * 1024 * 1024
 
 router = APIRouter(tags=["Files"])
 
@@ -43,6 +45,33 @@ def _resolve_base_url(request: Request, config: dict) -> str:
     return str(request.base_url)
 
 
+async def _stream_gdrive(storage, gfile_id: str) -> AsyncIterator[bytes]:
+    """Yield gdrive file bytes chunk-by-chunk without buffering the full payload."""
+    from googleapiclient.http import MediaIoBaseDownload
+
+    request_obj = storage.service.files().get_media(fileId=gfile_id)
+    buffer = io.BytesIO()
+    downloader = MediaIoBaseDownload(buffer, request_obj, chunksize=GDRIVE_STREAM_CHUNK)
+
+    def _pull_chunk() -> tuple[bytes, bool]:
+        _, finished_now = downloader.next_chunk()
+        chunk = buffer.getvalue()
+        buffer.seek(0)
+        buffer.truncate()
+        return chunk, finished_now
+
+    finished = False
+    while not finished:
+        data, finished = await run_in_threadpool(_pull_chunk)
+        if data:
+            yield data
+
+
+async def _load_metadata(fileid: str, filename: str):
+    """Load metadata off the event loop (storage backends may do network I/O)."""
+    return await run_in_threadpool(cache.load_metadata, fileid, filename)
+
+
 async def _download_response(fileid: str, filename: str) -> Response:
     """Build the file download response using the configured storage backend."""
     config = get_config()
@@ -54,14 +83,14 @@ async def _download_response(fileid: str, filename: str) -> Response:
     try:
         if storage.cache and storage.is_cached(fileid, filename):
             cached_path = storage.get_cached(fileid, filename)
-            metadata = cache.load_metadata(fileid, filename)
+            metadata = await _load_metadata(fileid, filename)
             return FileResponse(cached_path, media_type=metadata.mimeType, filename=metadata.name)
 
         if config["host"]["cdn"]["enabled"]:
             cdn_url = config["host"]["cdn"]["url"].rstrip("/")
             return RedirectResponse(f"{cdn_url}/{fileid}/{filename}")
 
-        metadata = cache.load_metadata(fileid, filename)
+        metadata = await _load_metadata(fileid, filename)
         storage_name = config["storage"]
 
         if storage_name == "local":
@@ -71,12 +100,10 @@ async def _download_response(fileid: str, filename: str) -> Response:
             return FileResponse(file_path, media_type=metadata.mimeType, filename=metadata.name)
 
         if storage_name == "gdrive":
-            data = await run_in_threadpool(
-                lambda: storage.service.files()
-                .get_media(fileId=metadata.optional_gfileID)
-                .execute()
+            return StreamingResponse(
+                _stream_gdrive(storage, metadata.optional_gfileID),
+                media_type=metadata.mimeType,
             )
-            return StreamingResponse(BytesIO(data), media_type=metadata.mimeType)
 
         raise HTTPException(status_code=500, detail="Unknown storage backend")
 
@@ -127,7 +154,7 @@ async def share_page(fileid: str, filename: str, request: Request) -> Response:
     validate_filename_for_read(filename)
 
     try:
-        cache.load_metadata(fileid, filename)
+        await _load_metadata(fileid, filename)
     except FileNotFoundError:
         raise HTTPException(status_code=404, detail="Not Found!")
 

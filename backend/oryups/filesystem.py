@@ -80,12 +80,13 @@ class storage():
         if "delete" in config:
             self.delete_rule = config["delete"]
         else:
+            # In-memory default only; do not write to config on disk — the file
+            # may be mounted read-only (e.g. docker bind mount with :ro).
             self.delete_rule = {
                 "enabled": False,
                 "after": 3600,
                 "permanently": False
             }
-            configPath.write_text(dumps(config, ensure_ascii=False, indent=4))
 
     def _save(self, filename: str, fileid: str = ""):
         if not fileid:
@@ -105,13 +106,14 @@ class storage():
     def get_cached(self, fileid: str, filename: str) -> Path: raise FileNotFoundError(f"Cache file not found: {fileid} {filename}")
 
     def _config_check(self, config: dict, configPath: Path) -> dict:
+        # Apply in-memory defaults only. Runtime writes back to config.json are
+        # unsafe on read-only mounts.
         if "delete" not in config:
             config["delete"] = {
                 "enabled": False,
                 "after": 3600,
                 "permanently": False
             }
-            configPath.write_text(dumps(config, ensure_ascii=False, indent=4))
 
         return config
 
@@ -330,10 +332,10 @@ class gdrive(storage):
         config = super()._config_check(config, configPath)
         if not config["gdrive"]["root"]:
             raise ValueError("Google drive root is not defined.")
+        # In-memory default only; do not persist back to config.json.
         if "cache" not in config["gdrive"]:
             config["gdrive"]["cache"] = False
-            configPath.write_text(dumps(config, ensure_ascii=False, indent=4))
-        
+
         return config
 
     def _get_files(self, **kwargs):

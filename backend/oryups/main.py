@@ -1,3 +1,4 @@
+import html
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, HTTPException, Request
@@ -72,10 +73,25 @@ def _is_curl_ua(request: Request) -> bool:
 
 
 def _render_error(status_code: int, message: str) -> HTMLResponse:
-    """Render the static HTML error page with the given status code and message."""
-    template = STATIC_DIR.joinpath("error.html").read_text()
-    body = template.replace("StatusCode", str(status_code)).replace("StatusMessage", message)
-    return HTMLResponse(body, status_code=status_code)
+    """Render the static HTML error page with the given status code and message.
+
+    If the ``error.html`` template cannot be read (missing file, permission
+    denied, etc.) we emit a minimal inline page so the exception handler never
+    re-enters itself. Both substitutions are HTML-escaped as defense in depth.
+    """
+    safe_message = html.escape(message)
+    safe_code = html.escape(str(status_code))
+    try:
+        template = STATIC_DIR.joinpath("error.html").read_text()
+        body = template.replace("StatusCode", safe_code).replace("StatusMessage", safe_message)
+        return HTMLResponse(body, status_code=status_code)
+    except OSError:
+        fallback = (
+            f"<!doctype html><meta charset=\"utf-8\">"
+            f"<title>{safe_code}</title>"
+            f"<h1>{safe_code}</h1><p>{safe_message}</p>"
+        )
+        return HTMLResponse(fallback, status_code=status_code)
 
 
 def _build_error_response(request: Request, status_code: int, message: str) -> Response:
