@@ -10,27 +10,49 @@ from oryups.response import make_response
 from oryups.routers import api, api_v1, assets, files, root
 
 
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    """Load configuration and initialize storage on startup."""
-    load_config()
-    config = get_config()
-    if config["host"]["proxy"]:
+def _configure_middleware(app: FastAPI, config: dict) -> None:
+    """Attach CORS/Proxy middleware based on loaded configuration.
+
+    Safe defaults: if ``host.cors_origins`` is empty, no CORS middleware is
+    installed; if it's ``["*"]``, credentials are disabled per the Fetch
+    specification. Proxy-header trust is limited to ``host.proxy_trusted_hosts``
+    (defaults to localhost).
+    """
+    cors_origins = config["host"].get("cors_origins", []) or []
+    if cors_origins:
+        if list(cors_origins) == ["*"]:
+            app.add_middleware(
+                CORSMiddleware,
+                allow_origins=["*"],
+                allow_credentials=False,
+                allow_methods=["*"],
+                allow_headers=["*"],
+            )
+        else:
+            app.add_middleware(
+                CORSMiddleware,
+                allow_origins=list(cors_origins),
+                allow_credentials=True,
+                allow_methods=["*"],
+                allow_headers=["*"],
+            )
+
+    if config["host"].get("proxy", False):
         from uvicorn.middleware.proxy_headers import ProxyHeadersMiddleware
 
-        app.add_middleware(ProxyHeadersMiddleware, trusted_hosts="*")
+        trusted = config["host"].get("proxy_trusted_hosts", "127.0.0.1")
+        app.add_middleware(ProxyHeadersMiddleware, trusted_hosts=trusted)
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Load configuration and initialize storage + middleware on startup."""
+    load_config()
+    _configure_middleware(app, get_config())
     yield
 
 
 app = FastAPI(title="UPServer", lifespan=lifespan)
-
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
 
 app.include_router(api.router)
 app.include_router(api_v1.router)

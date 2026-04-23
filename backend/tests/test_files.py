@@ -15,7 +15,7 @@ def test_put_upload_returns_raw_share_url_and_stores_file(
     content = b"uploaded bytes"
     fileid, share_url = upload_file(client, "upload.txt", content)
 
-    assert share_url == f"http://testserver/{fileid}/upload.txt"
+    assert share_url == f"https://upload.example.test/{fileid}/upload.txt"
     assert Path(test_config["local"]["root"], fileid, "upload.txt").read_bytes() == content
 
 

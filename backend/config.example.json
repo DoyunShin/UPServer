@@ -6,11 +6,15 @@
         "port": 5000,
         "domain": "https://upload.example.com/",
         "proxy": false,
+        "proxy_trusted_hosts": "127.0.0.1",
         "cdn": {
             "enabled": false,
             "url": "https://upscdn.example.com/"
         },
-        "cachetime": 600
+        "cachetime": 600,
+        "max_upload_size": 1073741824,
+        "cors_origins": [],
+        "admin_token": ""
     },
     "delete": {
         "enabled": true,

@@ -6,7 +6,10 @@ from tests.conftest import upload_file
 
 
 def test_clearcache_returns_envelope(client: TestClient) -> None:
-    response = client.get("/api/v1/clearcache")
+    response = client.get(
+        "/api/v1/clearcache",
+        headers={"x-admin-token": "test-admin-secret"},
+    )
 
     assert response.status_code == 200
     assert response.json() == {

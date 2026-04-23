@@ -25,8 +25,12 @@ def test_config(tmp_path: Path) -> Generator[dict[str, Any], None, None]:
     config["local"]["root"] = str(storage_root.resolve())
     config["host"]["domain"] = "https://upload.example.test/"
     config["host"]["proxy"] = False
+    config["host"]["proxy_trusted_hosts"] = "127.0.0.1"
     config["host"]["cdn"]["enabled"] = False
     config["host"]["cachetime"] = 600
+    config["host"]["max_upload_size"] = 1024 * 1024
+    config["host"]["cors_origins"] = []
+    config["host"]["admin_token"] = "test-admin-secret"
     config["folderidlength"] = 6
     config["general"] = {
         "name": "Test Upload",

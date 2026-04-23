@@ -14,6 +14,13 @@ from fastapi.responses import (
 from oryups.config import STATIC_DIR, get_config, get_storage
 from oryups.services import cache
 from oryups.utils.upload import buffer_request_body
+from oryups.utils.validation import (
+    validate_fileid,
+    validate_filename_for_read,
+    validate_filename_for_write,
+)
+
+DEFAULT_MAX_UPLOAD_SIZE: int = 1 << 30
 
 router = APIRouter(tags=["Files"])
 
@@ -23,10 +30,26 @@ def _is_curl_ua(request: Request) -> bool:
     return "curl" in request.headers.get("user-agent", "")
 
 
+def _resolve_base_url(request: Request, config: dict) -> str:
+    """Pick the public base URL for generated share links.
+
+    Prefers ``config["host"]["domain"]`` so attackers cannot poison the URL
+    via a forged ``Host`` header; falls back to ``request.base_url`` when no
+    trustworthy domain is configured.
+    """
+    domain = (config["host"].get("domain") or "").strip()
+    if domain and domain.startswith(("http://", "https://")):
+        return domain if domain.endswith("/") else domain + "/"
+    return str(request.base_url)
+
+
 async def _download_response(fileid: str, filename: str) -> Response:
     """Build the file download response using the configured storage backend."""
-    storage = get_storage()
     config = get_config()
+    validate_fileid(fileid, config["folderidlength"])
+    validate_filename_for_read(filename)
+
+    storage = get_storage()
 
     try:
         if storage.cache and storage.is_cached(fileid, filename):
@@ -70,19 +93,21 @@ async def download_direct(fileid: str, filename: str) -> Response:
 @router.put("/{filename:path}")
 async def upload(filename: str, request: Request) -> PlainTextResponse:
     """Upload a file via raw PUT body; returns the share URL as plain text."""
-    if "/" in filename or filename.startswith("."):
-        raise HTTPException(status_code=400, detail="Invalid path")
+    validate_filename_for_write(filename)
 
-    tmp, size = await buffer_request_body(request)
+    config = get_config()
+    max_size = int(config["host"].get("max_upload_size", DEFAULT_MAX_UPLOAD_SIZE))
 
-    content_length_header = request.headers.get("content-length")
-    filesize = int(content_length_header) if content_length_header else size
+    tmp, size = await buffer_request_body(request, max_size=max_size)
 
     storage = get_storage()
-    metadata = await run_in_threadpool(storage.save, tmp, filesize, filename)
+    try:
+        metadata = await run_in_threadpool(storage.save, tmp, size, filename)
+    finally:
+        tmp.close()
     cache.store_cache(metadata)
 
-    base_url = str(request.base_url)
+    base_url = _resolve_base_url(request, config)
     host = urlparse(base_url).hostname
     if host in ("localhost", "127.0.0.1"):
         print("WARNING: Host URL is not set correctly! Check your proxy settings. (HOST Header)")
@@ -98,8 +123,8 @@ async def share_page(fileid: str, filename: str, request: Request) -> Response:
     if _is_curl_ua(request):
         return await _download_response(fileid, filename)
 
-    if len(fileid) != config["folderidlength"]:
-        raise HTTPException(status_code=404, detail="Not Found!")
+    validate_fileid(fileid, config["folderidlength"])
+    validate_filename_for_read(filename)
 
     try:
         cache.load_metadata(fileid, filename)

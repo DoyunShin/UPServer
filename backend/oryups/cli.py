@@ -43,13 +43,14 @@ def main() -> None:
     config = loads(config_path.read_text())
     host_cfg = config["host"]
     proxy_enabled = bool(host_cfg.get("proxy", False))
+    forwarded_allow_ips = host_cfg.get("proxy_trusted_hosts", "127.0.0.1")
 
     uvicorn.run(
         "oryups.main:app",
         host=args.host or host_cfg["ip"],
         port=args.port or int(host_cfg["port"]),
         proxy_headers=proxy_enabled,
-        forwarded_allow_ips="*" if proxy_enabled else "127.0.0.1",
+        forwarded_allow_ips=forwarded_allow_ips,
         reload=args.reload,
     )
 

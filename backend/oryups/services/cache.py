@@ -1,3 +1,4 @@
+import threading
 import time
 from typing import Optional
 
@@ -5,11 +6,13 @@ from oryups.config import get_config, get_storage
 from oryups.filesystem import Metadata
 
 _cache: dict[str, dict] = {}
+_cache_lock: threading.Lock = threading.Lock()
 
 
 def store_cache(metadata: Metadata) -> None:
     """Cache metadata by file id with a timestamp."""
-    _cache[metadata.id] = {"time": int(time.time()), "metadata": metadata}
+    with _cache_lock:
+        _cache[metadata.id] = {"time": int(time.time()), "metadata": metadata}
 
 
 def get_cache(fileid: str, filename: str) -> Optional[Metadata]:
@@ -23,24 +26,28 @@ def get_cache(fileid: str, filename: str) -> Optional[Metadata]:
         metadata(Metadata | None): Cached metadata or None on miss/expiry.
     """
     cachetime = get_config()["host"]["cachetime"]
-    entry = _cache.get(fileid)
-    if entry is None:
-        return None
-    if entry["metadata"].name != filename:
-        return None
-    if entry["time"] + cachetime <= int(time.time()):
-        _cache.pop(fileid, None)
-        return None
-    return entry["metadata"]
+    now = int(time.time())
+    with _cache_lock:
+        entry = _cache.get(fileid)
+        if entry is None:
+            return None
+        if entry["metadata"].name != filename:
+            return None
+        if entry["time"] + cachetime <= now:
+            _cache.pop(fileid, None)
+            return None
+        return entry["metadata"]
 
 
 def clear_cache() -> None:
     """Evict all expired cache entries."""
     cachetime = get_config()["host"]["cachetime"]
     now = int(time.time())
-    for fileid in list(_cache.keys()):
-        if _cache[fileid]["time"] + cachetime < now:
-            _cache.pop(fileid, None)
+    with _cache_lock:
+        for fileid in list(_cache.keys()):
+            entry = _cache.get(fileid)
+            if entry is not None and entry["time"] + cachetime < now:
+                _cache.pop(fileid, None)
 
 
 def load_metadata(fileid: str, filename: str) -> Metadata:

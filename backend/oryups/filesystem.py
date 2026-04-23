@@ -232,8 +232,10 @@ class gdrive(storage):
             "file_metadata_info": file_metadata_info
         }
 
-        self.cachequeue.append(fileid)
+        # Populate the lookup dict before exposing the id to the worker via the queue;
+        # otherwise the worker can pop() and observe a half-initialized entry.
         self.cachequeueID[fileid] = new
+        self.cachequeue.append(fileid)
 
     def _cache_setup(self, config: dict):
         cache_config = config.copy()
@@ -273,38 +275,45 @@ class gdrive(storage):
 
     
     def _cache_worker(self):
+        # Any exception escaping this loop kills the daemon thread and silently
+        # strands all queued uploads for the rest of the process lifetime. Catch
+        # everything, log, and move on to the next item.
         while True:
-            if len(self.cachequeue) == 0:
+            try:
+                if len(self.cachequeue) == 0:
+                    time.sleep(1)
+                    continue
+
+                fileid = self.cachequeue.pop(0)
+
+                raw_metadata = self.cachequeueID.get(fileid, {}).get("metadata")
+                raw_info = self.cachequeueID.get(fileid, {}).get("file_info")
+                raw_metadata_info = self.cachequeueID.get(fileid, {}).get("file_metadata_info")
+
+                metadata: Metadata
+                file_info: dict
+                file_metadata_info: dict
+
+                if isinstance(raw_metadata, Metadata): metadata = raw_metadata
+                else: continue
+                if isinstance(raw_info, dict): file_info = raw_info
+                else: continue
+                if isinstance(raw_metadata_info, dict): file_metadata_info = raw_metadata_info
+                else: continue
+
+                filePath = self.cacheControl.get_file_path(metadata.id, metadata.name)
+                metadataPath = self.cacheControl.get_file_path(metadata.id, metadata.name, metadata=True)
+
+                if not (filePath and metadataPath):
+                    print(f"[cache worker] cache file missing: {metadata.id} {metadata.name}")
+                    continue
+
+                self.save_MediaFileUpload(filePath, metadataPath, metadata, file_info, file_metadata_info)
+                self.cacheControl.remove(metadata.id, metadata.name, metadata.delete, force=True, permanently=True)
+                self.cachequeueID.pop(fileid, None)
+            except Exception as exc:
+                print(f"[cache worker] exception: {exc!r}")
                 time.sleep(1)
-                continue
-
-            fileid = self.cachequeue.pop(0)
-            # metadata: Metadata = self.cachequeueID[fileid]["metadata"]
-
-            raw_metadata = self.cachequeueID.get(fileid, {}).get("metadata")
-            raw_info = self.cachequeueID.get(fileid, {}).get("file_info")
-            raw_metadata_info = self.cachequeueID.get(fileid, {}).get("file_metadata_info")
-
-            metadata: Metadata
-            file_info: dict
-            file_metadata_info: dict
-
-            if isinstance(raw_metadata, Metadata): metadata = raw_metadata
-            else: continue
-            if isinstance(raw_info, dict): file_info = raw_info
-            else: continue
-            if isinstance(raw_metadata_info, dict): file_metadata_info = raw_metadata_info
-            else: continue
-
-            filePath = self.cacheControl.get_file_path(metadata.id, metadata.name)
-            metadataPath = self.cacheControl.get_file_path(metadata.id, metadata.name, metadata=True)
-
-            if not (filePath and metadataPath):
-                raise FileNotFoundError(f"Cache file not found: {metadata.id} {metadata.name}")
-            
-            self.save_MediaFileUpload(filePath, metadataPath, metadata, file_info, file_metadata_info)
-            self.cacheControl.remove(metadata.id, metadata.name, metadata.delete, force=True, permanently=True)
-            self.cachequeueID.pop(fileid)
 
     def get_cached(self, fileid: str, filename: str) -> Path:
         if self.cache and fileid in self.cachequeueID:
@@ -430,8 +439,10 @@ class gdrive(storage):
     def save_BytesIO(self, file: LimitedStream, metadata: Metadata, file_info: dict, file_metadata_info: dict) -> Metadata:
         metadataIO = BytesIO(metadata.to_json().encode("utf-8"))
 
-        #media = self.UPSMediaIoStreamUpload(file, mimetype, filesize, chunksize=filesize, resumable=True)
-        media = self.UPSMediaIoStreamUpload(file, metadata.mimeType, metadata.size, chunksize=metadata.size, resumable=True)
+        # chunksize must be -1 or > 0; guard zero-byte uploads so the
+        # UPSMediaIoStreamUpload constructor does not raise InvalidChunkSizeError.
+        chunksize = max(int(metadata.size), 1)
+        media = self.UPSMediaIoStreamUpload(file, metadata.mimeType, metadata.size, chunksize=chunksize, resumable=True)
         mtdata = self.MediaIoBaseUpload(metadataIO, mimetype="application/json")
         self.upload(file_info, media)
         self.upload(file_metadata_info, mtdata)
