@@ -115,7 +115,7 @@ def get(path):
     try:
         if len(fileid) != config["folderidlength"]: return abort(404)
         metadata = load_metadata(fileid, filename)
-        return STATIC_DIR.joinpath("item.html").read_text(), 200
+        return STATIC_DIR.joinpath("index.html").read_text(), 200
 
     except FileNotFoundError:
         return abort(404)
