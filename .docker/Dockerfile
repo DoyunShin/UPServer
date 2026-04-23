@@ -1,12 +1,15 @@
-FROM ghcr.io/doyunshin/apache-python:3.13
+FROM python:3.12-slim
 
 WORKDIR /app
-COPY requirements.txt ./
 
-RUN pip install -U pip wheel setuptools && \
-    pip install -U -r requirements.txt && \
-    mkdir /app/data/logs -p
+COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
 
-COPY ./*.py .docker/app.wsgi ./
-COPY static/ static/
-COPY .docker/apache.conf /usr/local/apache2/conf/sites/
+COPY backend/pyproject.toml ./
+COPY backend/uv.lock* ./
+COPY backend/oryups ./oryups
+RUN uv sync --no-dev
+
+ENV PATH="/app/.venv/bin:${PATH}"
+EXPOSE 80
+
+CMD ["ups", "--config", "/app/config.json", "--host", "0.0.0.0", "--port", "80"]

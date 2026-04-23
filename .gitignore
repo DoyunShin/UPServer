@@ -133,3 +133,6 @@ config.json
 uploads/
 gdrive.py
 app.wsgi
+
+# codex plugin marker
+.codex

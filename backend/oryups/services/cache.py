@@ -1,0 +1,61 @@
+import time
+from typing import Optional
+
+from oryups.config import get_config, get_storage
+from oryups.filesystem import Metadata
+
+_cache: dict[str, dict] = {}
+
+
+def store_cache(metadata: Metadata) -> None:
+    """Cache metadata by file id with a timestamp."""
+    _cache[metadata.id] = {"time": int(time.time()), "metadata": metadata}
+
+
+def get_cache(fileid: str, filename: str) -> Optional[Metadata]:
+    """Return cached metadata if present and not expired.
+
+    Args:
+        fileid(str): File id
+        filename(str): Expected filename (must match cached metadata)
+
+    Return:
+        metadata(Metadata | None): Cached metadata or None on miss/expiry.
+    """
+    cachetime = get_config()["host"]["cachetime"]
+    entry = _cache.get(fileid)
+    if entry is None:
+        return None
+    if entry["metadata"].name != filename:
+        return None
+    if entry["time"] + cachetime <= int(time.time()):
+        _cache.pop(fileid, None)
+        return None
+    return entry["metadata"]
+
+
+def clear_cache() -> None:
+    """Evict all expired cache entries."""
+    cachetime = get_config()["host"]["cachetime"]
+    now = int(time.time())
+    for fileid in list(_cache.keys()):
+        if _cache[fileid]["time"] + cachetime < now:
+            _cache.pop(fileid, None)
+
+
+def load_metadata(fileid: str, filename: str) -> Metadata:
+    """Load metadata for (fileid, filename), using cache when possible.
+
+    Args:
+        fileid(str): File id
+        filename(str): Filename
+
+    Return:
+        metadata(Metadata): Metadata object.
+    """
+    metadata = get_cache(fileid, filename)
+    if metadata is None:
+        metadata = get_storage().load_metadata(fileid, filename)
+        metadata.delete = ""
+        store_cache(metadata)
+    return metadata

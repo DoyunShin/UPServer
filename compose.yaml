@@ -4,6 +4,8 @@ services:
     ports:
       - "8000:80"
     volumes:
-      - config.json:/app/config.json:ro
+      - ./backend/config.json:/app/config.json:ro
       - upload-data:/app/upload-data
-      - logs:/app/data/logs
+
+volumes:
+  upload-data:

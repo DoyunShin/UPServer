@@ -1,14 +1,14 @@
 from pathlib import Path
 from json import loads, dumps
-from flask import Response, send_file
 from mimetypes import guess_type
-from werkzeug.wsgi import LimitedStream
 from threading import Thread
 from io import BytesIO
-from typing import IO
+from typing import IO, Any
 import string
 import random
 import time
+
+LimitedStream = Any
 
 storageTypes = ["gdrive", "local"]
 
@@ -98,7 +98,7 @@ class storage():
     def remove(self, fileid: str, filename: str, deletepass: str, force: bool = False): ...
     def save(self, file: LimitedStream | IO[bytes], filesize: int | None, filename: str, fileid: str = "") -> Metadata: ...
     def load_metadata(self, fileid: str, filename: str) -> Metadata: ...
-    def download(self, fileid: str, filename: str) -> Response: ...
+    def download(self, fileid: str, filename: str) -> Any: ...
     def get_list(self, path, dir) -> list[str]: ...
     def is_fid_exists(self, fileid: str) -> bool: ...
     def is_cached(self, fileid: str, filename: str) -> bool: return False
@@ -470,12 +470,8 @@ class gdrive(storage):
         
         return metadata
 
-    def download(self, fileid: str, filename: str) -> Response:
-        metadata = self.load_metadata(fileid, filename)
-        if self.cache and fileid in self.cachequeueID:
-            return send_file(self.cacheControl.get_file_path(metadata.id, metadata.name), mimetype=metadata.mimeType)
-        else:
-            return send_file(self.service.files().get_media(fileId=metadata.optional_gfileID).execute(), mimetype=metadata.mimeType)
+    def download(self, fileid: str, filename: str) -> Any:
+        raise NotImplementedError("storage.download is handled in routers/files.py for FastAPI")
 
 
 class local(storage):
@@ -568,10 +564,8 @@ class local(storage):
         
         return metadata
     
-    def download(self, fileid: str, filename: str) -> Response:
-        metadata = self.load_metadata(fileid, filename)
-        return send_file(self.root / fileid / filename, mimetype=metadata.mimeType)
-        #return (folder / metadata["name"]).read_bytes()
+    def download(self, fileid: str, filename: str) -> Any:
+        raise NotImplementedError("storage.download is handled in routers/files.py for FastAPI")
 
     def get_file_path(self, fileid: str, filename: str, metadata: bool = False) -> Path:
         self.load_metadata(fileid, filename)
