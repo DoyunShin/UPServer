@@ -18,8 +18,9 @@
     },
     "delete": {
         "enabled": true,
-        "after": 3600,
-        "permanently": false
+        "after": 604800,
+        "permanently": false,
+        "reaper_interval": 3600
     },
     "folderidlength": 6,
     "deletelength": 8,

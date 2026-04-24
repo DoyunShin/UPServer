@@ -1,5 +1,7 @@
+import asyncio
 import html
 from contextlib import asynccontextmanager
+from typing import Optional
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.exceptions import RequestValidationError
@@ -9,6 +11,7 @@ from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse, Res
 from oryups.config import STATIC_DIR, get_config, load_config
 from oryups.response import make_response
 from oryups.routers import api, api_v1, assets, files, root
+from oryups.services.reaper import run_reaper
 
 
 def _configure_middleware(app: FastAPI, config: dict) -> None:
@@ -45,12 +48,40 @@ def _configure_middleware(app: FastAPI, config: dict) -> None:
         app.add_middleware(ProxyHeadersMiddleware, trusted_hosts=trusted)
 
 
+_reaper_task: Optional[asyncio.Task] = None
+_reaper_stop: Optional[asyncio.Event] = None
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Load configuration and initialize storage + middleware on startup."""
+    """Load configuration, initialize middleware, and manage the reaper task."""
+    global _reaper_task, _reaper_stop
+
     load_config()
-    _configure_middleware(app, get_config())
-    yield
+    cfg = get_config()
+    _configure_middleware(app, cfg)
+
+    delete_rule = cfg.get("delete", {})
+    if delete_rule.get("enabled") and delete_rule.get("permanently"):
+        _reaper_stop = asyncio.Event()
+        _reaper_task = asyncio.create_task(run_reaper(_reaper_stop))
+    else:
+        _reaper_stop = None
+        _reaper_task = None
+
+    try:
+        yield
+    finally:
+        if _reaper_task is not None and _reaper_stop is not None:
+            _reaper_stop.set()
+            try:
+                await asyncio.wait_for(_reaper_task, timeout=5)
+            except asyncio.TimeoutError:
+                _reaper_task.cancel()
+            except Exception:
+                pass
+        _reaper_task = None
+        _reaper_stop = None
 
 
 app = FastAPI(title="UPServer", lifespan=lifespan)
@@ -98,7 +129,7 @@ def _build_error_response(request: Request, status_code: int, message: str) -> R
     """Pick the right error representation (plain text / envelope / HTML) for a request."""
     if _is_curl_ua(request):
         return PlainTextResponse(f"{status_code}: {message}", status_code=status_code)
-    if _is_api_path(request.url.path):
+    if _is_api_path(request.url.path) or request.method == "DELETE":
         return make_response(status_code, message)
     return _render_error(status_code, message)
 

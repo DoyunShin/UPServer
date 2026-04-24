@@ -85,7 +85,8 @@ class storage():
             self.delete_rule = {
                 "enabled": False,
                 "after": 3600,
-                "permanently": False
+                "permanently": False,
+                "reaper_interval": 3600,
             }
 
     def _save(self, filename: str, fileid: str = ""):
@@ -96,7 +97,7 @@ class storage():
 
         return fileid, mimetype, metadataname
     
-    def remove(self, fileid: str, filename: str, deletepass: str, force: bool = False): ...
+    def remove(self, fileid: str, filename: str, deletepass: str, force: bool = False, permanently: bool = False) -> bool: ...
     def save(self, file: LimitedStream | IO[bytes], filesize: int | None, filename: str, fileid: str = "") -> Metadata: ...
     def load_metadata(self, fileid: str, filename: str) -> Metadata: ...
     def download(self, fileid: str, filename: str) -> Any: ...
@@ -112,7 +113,8 @@ class storage():
             config["delete"] = {
                 "enabled": False,
                 "after": 3600,
-                "permanently": False
+                "permanently": False,
+                "reaper_interval": 3600,
             }
 
         return config
@@ -136,7 +138,15 @@ class storage():
         metadata.delete = self._create_id(self.deletelength)
         metadata.hidden = False
         metadata.created_at = int(time.time())
-        metadata.delete_after = self.delete_rule["after"]
+
+        if self.delete_rule.get("enabled", False):
+            try:
+                after_value = float(self.delete_rule.get("after", -1))
+            except (TypeError, ValueError):
+                after_value = -1.0
+            metadata.delete_after = after_value if after_value > 0 else -1.0
+        else:
+            metadata.delete_after = -1.0
         return metadata
     
     def write_stream(self, stream: LimitedStream, path: Path):
@@ -343,7 +353,7 @@ class gdrive(storage):
             kwargs["fields"] = "nextPageToken, files(id, name, mimeType)"
         return self.service.files().list(includeItemsFromAllDrives=True, supportsAllDrives=True, pageSize=1000, **kwargs)
     
-    def remove(self, fileid: str, filename: str, deletepass: str, force: bool = False):
+    def remove(self, fileid: str, filename: str, deletepass: str, force: bool = False, permanently: bool = False) -> bool:
         try:
             metadata = self.load_metadata(fileid, filename)
         except FileNotFoundError:
@@ -355,6 +365,13 @@ class gdrive(storage):
         rootList = self.get_list(dir=self.root, mimeType="application/vnd.google-apps.folder")
         parentFolderID = rootList[metadata.id]
         infiles = self.get_list(dir=parentFolderID)
+
+        if permanently:
+            for name, gid in infiles.items():
+                self.service.files().delete(fileId=gid, supportsAllDrives=True).execute()
+            self.service.files().delete(fileId=parentFolderID, supportsAllDrives=True).execute()
+            return True
+
         if "delete" in rootList:
             deleteFolder = rootList["delete"]
             deleteFolderList = self.get_list(dir=deleteFolder)

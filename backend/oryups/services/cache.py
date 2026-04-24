@@ -4,6 +4,7 @@ from typing import Optional
 
 from oryups.config import get_config, get_storage
 from oryups.filesystem import Metadata
+from oryups.utils.expiry import is_expired
 
 _cache: dict[str, dict] = {}
 _cache_lock: threading.Lock = threading.Lock()
@@ -50,8 +51,18 @@ def clear_cache() -> None:
                 _cache.pop(fileid, None)
 
 
+def invalidate(fileid: str) -> None:
+    """Drop a single file's cached metadata, if any."""
+    with _cache_lock:
+        _cache.pop(fileid, None)
+
+
 def load_metadata(fileid: str, filename: str) -> Metadata:
     """Load metadata for (fileid, filename), using cache when possible.
+
+    Enforces retention: if ``config["delete"]`` marks the file as expired,
+    the cache entry is evicted and ``FileNotFoundError`` is raised so the
+    router returns 404.
 
     Args:
         fileid(str): File id
@@ -65,4 +76,9 @@ def load_metadata(fileid: str, filename: str) -> Metadata:
         metadata = get_storage().load_metadata(fileid, filename)
         metadata.delete = ""
         store_cache(metadata)
+
+    if is_expired(metadata, get_config().get("delete", {})):
+        with _cache_lock:
+            _cache.pop(fileid, None)
+        raise FileNotFoundError(f"{fileid}/{filename} expired")
     return metadata

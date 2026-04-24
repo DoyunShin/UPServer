@@ -1,11 +1,13 @@
 import io
+import secrets
 from typing import AsyncIterator
 from urllib.parse import urlparse
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, Header, HTTPException, Request
 from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import (
     FileResponse,
+    JSONResponse,
     PlainTextResponse,
     RedirectResponse,
     Response,
@@ -13,6 +15,7 @@ from fastapi.responses import (
 )
 
 from oryups.config import STATIC_DIR, get_config, get_storage
+from oryups.response import make_response
 from oryups.services import cache
 from oryups.utils.upload import buffer_request_body
 from oryups.utils.validation import (
@@ -119,7 +122,13 @@ async def download_direct(fileid: str, filename: str) -> Response:
 
 @router.put("/{filename:path}")
 async def upload(filename: str, request: Request) -> PlainTextResponse:
-    """Upload a file via raw PUT body; returns the share URL as plain text."""
+    """Upload a file via raw PUT body; returns the share URL as plain text.
+
+    Browser clients additionally receive the per-file owner key in the
+    ``X-Owner-Key`` response header, enabling them to issue authenticated
+    ``DELETE`` requests for files they uploaded. curl clients get the plain
+    URL body only, preserving the original contract.
+    """
     validate_filename_for_write(filename)
 
     config = get_config()
@@ -132,6 +141,8 @@ async def upload(filename: str, request: Request) -> PlainTextResponse:
         metadata = await run_in_threadpool(storage.save, tmp, size, filename)
     finally:
         tmp.close()
+
+    owner_key = metadata.delete
     cache.store_cache(metadata)
 
     base_url = _resolve_base_url(request, config)
@@ -139,7 +150,101 @@ async def upload(filename: str, request: Request) -> PlainTextResponse:
     if host in ("localhost", "127.0.0.1"):
         print("WARNING: Host URL is not set correctly! Check your proxy settings. (HOST Header)")
 
-    return PlainTextResponse(f"{base_url}{metadata.id}/{metadata.name}")
+    response = PlainTextResponse(f"{base_url}{metadata.id}/{metadata.name}")
+    if not _is_curl_ua(request) and owner_key:
+        response.headers["X-Owner-Key"] = owner_key
+    return response
+
+
+@router.delete(
+    "/{fileid}/{filename}",
+    responses={
+        200: {
+            "description": "File removed",
+            "content": {
+                "application/json": {
+                    "examples": {
+                        "success": {
+                            "summary": "Deleted",
+                            "value": {
+                                "status": 200,
+                                "message": "Deleted",
+                                "data": None,
+                            },
+                        },
+                    },
+                },
+            },
+        },
+        403: {
+            "description": "Owner key missing or incorrect",
+            "content": {
+                "application/json": {
+                    "examples": {
+                        "forbidden": {
+                            "summary": "Missing or wrong X-Owner-Key",
+                            "value": {
+                                "status": 403,
+                                "message": "Forbidden",
+                                "data": None,
+                            },
+                        },
+                    },
+                },
+            },
+        },
+        404: {
+            "description": "File not found",
+            "content": {
+                "application/json": {
+                    "examples": {
+                        "not_found": {
+                            "summary": "Missing fileid or filename",
+                            "value": {
+                                "status": 404,
+                                "message": "Not Found!",
+                                "data": None,
+                            },
+                        },
+                    },
+                },
+            },
+        },
+    },
+)
+async def delete_file(
+    fileid: str,
+    filename: str,
+    x_owner_key: str = Header(default=""),
+) -> JSONResponse:
+    """Permanently remove a file when the caller proves ownership.
+
+    Requires the ``X-Owner-Key`` header to match the key issued at upload
+    time. Unlike the retention reaper, user-initiated deletion always
+    removes the file immediately regardless of ``delete.permanently``.
+    """
+    config = get_config()
+    validate_fileid(fileid, config["folderidlength"])
+    validate_filename_for_read(filename)
+
+    storage = get_storage()
+    try:
+        metadata = await run_in_threadpool(storage.load_metadata, fileid, filename)
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail="Not Found!")
+
+    expected = getattr(metadata, "delete", "") or ""
+    if not expected or not secrets.compare_digest(x_owner_key, expected):
+        raise HTTPException(status_code=403, detail="Forbidden")
+
+    removed = await run_in_threadpool(
+        storage.remove, fileid, filename, expected, False, True
+    )
+    if not removed:
+        raise HTTPException(status_code=404, detail="Not Found!")
+
+    cache.invalidate(fileid)
+    return make_response(200, "Deleted")
 
 
 @router.get("/{fileid}/{filename}")

@@ -39,6 +39,12 @@ def test_config(tmp_path: Path) -> Generator[dict[str, Any], None, None]:
     config["host"]["cors_origins"] = []
     config["host"]["admin_token"] = "test-admin-secret"
     config["folderidlength"] = 6
+    config["delete"] = {
+        "enabled": True,
+        "after": 3600,
+        "permanently": False,
+        "reaper_interval": 3600,
+    }
     config["general"] = {
         "name": "Test Upload",
         "brand": "UPServer Tests",
