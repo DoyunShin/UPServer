@@ -192,7 +192,19 @@
     </div>
 
     {#if status === 'success' && result}
-      <div class="result">
+      <div
+        class="result"
+        class:dragging
+        on:dragover={onDragOver}
+        on:dragleave={onDragLeave}
+        on:drop={onDrop}
+        role="presentation"
+      >
+        {#if dragging}
+          <div class="drop-overlay">
+            <div class="drop-overlay-text">Drop to upload another file</div>
+          </div>
+        {/if}
         <div class="result-head">
           <div class="result-icon" aria-hidden="true">
             <svg
@@ -236,7 +248,12 @@
         {/if}
 
         <div class="result-actions">
-          <a class="btn-secondary" href={result.detailPath}>Open file page</a>
+          <a
+            class="btn-secondary"
+            href={result.detailPath}
+            target="_blank"
+            rel="noopener noreferrer">Open file page</a
+          >
           <button class="btn-primary" type="button" on:click={reset}>Upload another</button>
         </div>
       </div>
@@ -371,6 +388,27 @@
     gap: 24px;
     min-height: 380px;
     justify-content: center;
+    position: relative;
+    transition: background 0.15s ease;
+  }
+  .result.dragging {
+    box-shadow: inset 0 0 0 1.5px var(--foreground);
+  }
+  .drop-overlay {
+    position: absolute;
+    inset: 0;
+    background: color-mix(in oklch, var(--muted) 70%, var(--foreground) 8%);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    pointer-events: none;
+    z-index: 2;
+  }
+  .drop-overlay-text {
+    font-size: 24px;
+    font-weight: 500;
+    letter-spacing: -0.02em;
+    color: var(--foreground);
   }
   .result-head {
     display: flex;
