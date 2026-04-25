@@ -124,10 +124,10 @@ async def download_direct(fileid: str, filename: str) -> Response:
 async def upload(filename: str, request: Request) -> PlainTextResponse:
     """Upload a file via raw PUT body; returns the share URL as plain text.
 
-    Browser clients additionally receive the per-file owner key in the
-    ``X-Owner-Key`` response header, enabling them to issue authenticated
-    ``DELETE`` requests for files they uploaded. curl clients get the plain
-    URL body only, preserving the original contract.
+    The per-file owner key is always returned in the ``X-Owner-Key``
+    response header so any client (curl, browser, scripts) can capture it
+    at upload time and use it later to issue authenticated ``DELETE``
+    requests. The header is never emitted from any other endpoint.
     """
     validate_filename_for_write(filename)
 
@@ -151,7 +151,7 @@ async def upload(filename: str, request: Request) -> PlainTextResponse:
         print("WARNING: Host URL is not set correctly! Check your proxy settings. (HOST Header)")
 
     response = PlainTextResponse(f"{base_url}{metadata.id}/{metadata.name}")
-    if not _is_curl_ua(request) and owner_key:
+    if owner_key:
         response.headers["X-Owner-Key"] = owner_key
     return response
 

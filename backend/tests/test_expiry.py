@@ -26,7 +26,7 @@ def _expire_metadata(path: Path, fileid: str) -> None:
     cache.invalidate(fileid)
 
 
-def test_upload_curl_hides_owner_key(client: TestClient) -> None:
+def test_upload_curl_returns_owner_key(client: TestClient) -> None:
     response = client.put(
         "/curlfile.txt",
         content=b"curl data",
@@ -34,7 +34,11 @@ def test_upload_curl_hides_owner_key(client: TestClient) -> None:
     )
 
     assert response.status_code == 200
-    assert "x-owner-key" not in {k.lower() for k in response.headers.keys()}
+    owner_key = response.headers.get("X-Owner-Key")
+    assert owner_key is not None
+    assert len(owner_key) == 12
+    allowed = set(string.ascii_letters + string.digits)
+    assert set(owner_key).issubset(allowed)
 
 
 def test_upload_browser_returns_owner_key(client: TestClient) -> None:
