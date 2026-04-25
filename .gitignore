@@ -14,8 +14,8 @@ dist/
 downloads/
 eggs/
 .eggs/
-lib/
-lib64/
+/lib/
+/lib64/
 parts/
 sdist/
 var/
@@ -133,3 +133,13 @@ config.json
 uploads/
 gdrive.py
 app.wsgi
+
+# codex plugin marker
+.codex
+
+tmp/
+
+# Build-time staging copy populated by .github/workflows/cd.yaml so the
+# bundled config example ships inside the wheel without a hatch hook.
+# The canonical example lives at backend/config.example.json.
+/backend/oryups/config.example.json

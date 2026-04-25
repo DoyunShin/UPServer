@@ -1,0 +1,101 @@
+name: cd
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions: {}
+
+jobs:
+  build:
+    name: Build sdist and wheel
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install frontend dependencies
+        working-directory: frontend
+        run: npm ci
+
+      - name: Build frontend
+        working-directory: frontend
+        run: npm run build
+
+      - name: Verify static bundle landed in package
+        run: test -f backend/oryups/static/index.html
+
+      - name: Stage example config inside the package
+        run: cp backend/config.example.json backend/oryups/config.example.json
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Verify pyproject version matches the pushed tag
+        run: |
+          tag="${GITHUB_REF_NAME#v}"
+          pyver="$(python -c 'import tomllib,pathlib; print(tomllib.loads(pathlib.Path("backend/pyproject.toml").read_text())["project"]["version"])')"
+          echo "tag=${tag} pyproject=${pyver}"
+          if [ "${tag}" != "${pyver}" ]; then
+            echo "::error::tag (${tag}) does not match pyproject.toml version (${pyver})"
+            exit 1
+          fi
+
+      - name: Install build tooling
+        run: python -m pip install --upgrade build
+
+      - name: Build sdist and wheel
+        working-directory: backend
+        run: python -m build
+
+      - name: Inspect wheel contents
+        run: |
+          echo "::group::wheel contents"
+          python -m zipfile -l backend/dist/*.whl
+          echo "::endgroup::"
+          echo "::group::sdist contents"
+          for f in backend/dist/*.tar.gz; do tar -tzf "$f"; done
+          echo "::endgroup::"
+
+      - name: Sanity check that the SPA index ships in the wheel
+        run: |
+          python -m zipfile -l backend/dist/*.whl | grep -q 'oryups/static/index.html'
+          python -m zipfile -l backend/dist/*.whl | grep -q 'oryups/config.example.json'
+
+      - name: Upload distribution artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: backend/dist/
+          if-no-files-found: error
+
+  publish:
+    name: Publish to PyPI via OIDC
+    needs: build
+    runs-on: ubuntu-latest
+
+    # Required for trusted publishing (OIDC). The PyPI side is configured to
+    # accept this workflow from DoyunShin/UPServer.
+    permissions:
+      id-token: write
+
+    steps:
+      - name: Download distribution artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1

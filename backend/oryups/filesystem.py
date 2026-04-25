@@ -1,14 +1,14 @@
 from pathlib import Path
 from json import loads, dumps
-from flask import Response, send_file
 from mimetypes import guess_type
-from werkzeug.wsgi import LimitedStream
 from threading import Thread
 from io import BytesIO
-from typing import IO
+from typing import IO, Any
+import secrets
 import string
-import random
 import time
+
+LimitedStream = Any
 
 storageTypes = ["gdrive", "local"]
 
@@ -25,7 +25,7 @@ class Metadata:
     optional_parentfolderID: str
     optional_gfileID: str
 
-    def to_dict(self, public: bool = False):
+    def to_dict(self, private: bool = False):
         data = {
             "id": self.id,
             "name": self.name,
@@ -36,13 +36,13 @@ class Metadata:
             "delete_after": self.delete_after
         }
 
-        if not public:
+        if private:
             data["delete"] = self.delete
 
         return data
-    
-    def to_json(self, ensure_ascii: bool = False, indent: int = 0, public: bool = False):
-        return dumps(self.to_dict(public=public), ensure_ascii=ensure_ascii, indent=indent)
+
+    def to_json(self, ensure_ascii: bool = False, indent: int = 0, private: bool = False):
+        return dumps(self.to_dict(private=private), ensure_ascii=ensure_ascii, indent=indent)
     
     def load(self, data: dict = {}, dataraw: str = "", dataPath: Path = Path()):
         if data:
@@ -68,24 +68,26 @@ class Metadata:
 
 class storage():
     folderidlength: int
-    deletelength: int
+    ownerkeylength: int
     chunksize: int
     cache: bool
 
     def __init__(self, config: dict, configPath: Path):
         self.folderidlength = config["folderidlength"]
-        self.deletelength = config["deletelength"]
+        self.ownerkeylength = config["ownerkeylength"]
         self.chunksize = config["chunk"]
         
         if "delete" in config:
             self.delete_rule = config["delete"]
         else:
+            # In-memory default only; do not write to config on disk — the file
+            # may be mounted read-only (e.g. docker bind mount with :ro).
             self.delete_rule = {
                 "enabled": False,
                 "after": 3600,
-                "permanently": False
+                "permanently": False,
+                "reaper_interval": 3600,
             }
-            configPath.write_text(dumps(config, ensure_ascii=False, indent=4))
 
     def _save(self, filename: str, fileid: str = ""):
         if not fileid:
@@ -95,29 +97,32 @@ class storage():
 
         return fileid, mimetype, metadataname
     
-    def remove(self, fileid: str, filename: str, deletepass: str, force: bool = False): ...
+    def remove(self, fileid: str, filename: str, deletepass: str, force: bool = False, permanently: bool = False) -> bool: ...
     def save(self, file: LimitedStream | IO[bytes], filesize: int | None, filename: str, fileid: str = "") -> Metadata: ...
     def load_metadata(self, fileid: str, filename: str) -> Metadata: ...
-    def download(self, fileid: str, filename: str) -> Response: ...
+    def download(self, fileid: str, filename: str) -> Any: ...
     def get_list(self, path, dir) -> list[str]: ...
     def is_fid_exists(self, fileid: str) -> bool: ...
     def is_cached(self, fileid: str, filename: str) -> bool: return False
     def get_cached(self, fileid: str, filename: str) -> Path: raise FileNotFoundError(f"Cache file not found: {fileid} {filename}")
 
     def _config_check(self, config: dict, configPath: Path) -> dict:
+        # Apply in-memory defaults only. Runtime writes back to config.json are
+        # unsafe on read-only mounts.
         if "delete" not in config:
             config["delete"] = {
                 "enabled": False,
                 "after": 3600,
-                "permanently": False
+                "permanently": False,
+                "reaper_interval": 3600,
             }
-            configPath.write_text(dumps(config, ensure_ascii=False, indent=4))
 
         return config
 
 
     def _create_id(self, length: int) -> str:
-        return ''.join(random.choices(string.ascii_letters+ string.digits, k=length))
+        alphabet = string.ascii_letters + string.digits
+        return ''.join(secrets.choice(alphabet) for _ in range(length))
     
     def create_fileid(self) -> str:
         folderid = self._create_id(self.folderidlength)
@@ -131,10 +136,18 @@ class storage():
         metadata.name = filename
         metadata.mimeType = mimetype
         metadata.size = filesize
-        metadata.delete = self._create_id(self.deletelength)
+        metadata.delete = self._create_id(self.ownerkeylength)
         metadata.hidden = False
         metadata.created_at = int(time.time())
-        metadata.delete_after = self.delete_rule["after"]
+
+        if self.delete_rule.get("enabled", False):
+            try:
+                after_value = float(self.delete_rule.get("after", -1))
+            except (TypeError, ValueError):
+                after_value = -1.0
+            metadata.delete_after = after_value if after_value > 0 else -1.0
+        else:
+            metadata.delete_after = -1.0
         return metadata
     
     def write_stream(self, stream: LimitedStream, path: Path):
@@ -232,8 +245,10 @@ class gdrive(storage):
             "file_metadata_info": file_metadata_info
         }
 
-        self.cachequeue.append(fileid)
+        # Populate the lookup dict before exposing the id to the worker via the queue;
+        # otherwise the worker can pop() and observe a half-initialized entry.
         self.cachequeueID[fileid] = new
+        self.cachequeue.append(fileid)
 
     def _cache_setup(self, config: dict):
         cache_config = config.copy()
@@ -273,38 +288,45 @@ class gdrive(storage):
 
     
     def _cache_worker(self):
+        # Any exception escaping this loop kills the daemon thread and silently
+        # strands all queued uploads for the rest of the process lifetime. Catch
+        # everything, log, and move on to the next item.
         while True:
-            if len(self.cachequeue) == 0:
+            try:
+                if len(self.cachequeue) == 0:
+                    time.sleep(1)
+                    continue
+
+                fileid = self.cachequeue.pop(0)
+
+                raw_metadata = self.cachequeueID.get(fileid, {}).get("metadata")
+                raw_info = self.cachequeueID.get(fileid, {}).get("file_info")
+                raw_metadata_info = self.cachequeueID.get(fileid, {}).get("file_metadata_info")
+
+                metadata: Metadata
+                file_info: dict
+                file_metadata_info: dict
+
+                if isinstance(raw_metadata, Metadata): metadata = raw_metadata
+                else: continue
+                if isinstance(raw_info, dict): file_info = raw_info
+                else: continue
+                if isinstance(raw_metadata_info, dict): file_metadata_info = raw_metadata_info
+                else: continue
+
+                filePath = self.cacheControl.get_file_path(metadata.id, metadata.name)
+                metadataPath = self.cacheControl.get_file_path(metadata.id, metadata.name, metadata=True)
+
+                if not (filePath and metadataPath):
+                    print(f"[cache worker] cache file missing: {metadata.id} {metadata.name}")
+                    continue
+
+                self.save_MediaFileUpload(filePath, metadataPath, metadata, file_info, file_metadata_info)
+                self.cacheControl.remove(metadata.id, metadata.name, metadata.delete, force=True, permanently=True)
+                self.cachequeueID.pop(fileid, None)
+            except Exception as exc:
+                print(f"[cache worker] exception: {exc!r}")
                 time.sleep(1)
-                continue
-
-            fileid = self.cachequeue.pop(0)
-            # metadata: Metadata = self.cachequeueID[fileid]["metadata"]
-
-            raw_metadata = self.cachequeueID.get(fileid, {}).get("metadata")
-            raw_info = self.cachequeueID.get(fileid, {}).get("file_info")
-            raw_metadata_info = self.cachequeueID.get(fileid, {}).get("file_metadata_info")
-
-            metadata: Metadata
-            file_info: dict
-            file_metadata_info: dict
-
-            if isinstance(raw_metadata, Metadata): metadata = raw_metadata
-            else: continue
-            if isinstance(raw_info, dict): file_info = raw_info
-            else: continue
-            if isinstance(raw_metadata_info, dict): file_metadata_info = raw_metadata_info
-            else: continue
-
-            filePath = self.cacheControl.get_file_path(metadata.id, metadata.name)
-            metadataPath = self.cacheControl.get_file_path(metadata.id, metadata.name, metadata=True)
-
-            if not (filePath and metadataPath):
-                raise FileNotFoundError(f"Cache file not found: {metadata.id} {metadata.name}")
-            
-            self.save_MediaFileUpload(filePath, metadataPath, metadata, file_info, file_metadata_info)
-            self.cacheControl.remove(metadata.id, metadata.name, metadata.delete, force=True, permanently=True)
-            self.cachequeueID.pop(fileid)
 
     def get_cached(self, fileid: str, filename: str) -> Path:
         if self.cache and fileid in self.cachequeueID:
@@ -321,10 +343,10 @@ class gdrive(storage):
         config = super()._config_check(config, configPath)
         if not config["gdrive"]["root"]:
             raise ValueError("Google drive root is not defined.")
+        # In-memory default only; do not persist back to config.json.
         if "cache" not in config["gdrive"]:
             config["gdrive"]["cache"] = False
-            configPath.write_text(dumps(config, ensure_ascii=False, indent=4))
-        
+
         return config
 
     def _get_files(self, **kwargs):
@@ -332,7 +354,7 @@ class gdrive(storage):
             kwargs["fields"] = "nextPageToken, files(id, name, mimeType)"
         return self.service.files().list(includeItemsFromAllDrives=True, supportsAllDrives=True, pageSize=1000, **kwargs)
     
-    def remove(self, fileid: str, filename: str, deletepass: str, force: bool = False):
+    def remove(self, fileid: str, filename: str, deletepass: str, force: bool = False, permanently: bool = False) -> bool:
         try:
             metadata = self.load_metadata(fileid, filename)
         except FileNotFoundError:
@@ -344,6 +366,13 @@ class gdrive(storage):
         rootList = self.get_list(dir=self.root, mimeType="application/vnd.google-apps.folder")
         parentFolderID = rootList[metadata.id]
         infiles = self.get_list(dir=parentFolderID)
+
+        if permanently:
+            for name, gid in infiles.items():
+                self.service.files().delete(fileId=gid, supportsAllDrives=True).execute()
+            self.service.files().delete(fileId=parentFolderID, supportsAllDrives=True).execute()
+            return True
+
         if "delete" in rootList:
             deleteFolder = rootList["delete"]
             deleteFolderList = self.get_list(dir=deleteFolder)
@@ -428,10 +457,12 @@ class gdrive(storage):
         return metadata
 
     def save_BytesIO(self, file: LimitedStream, metadata: Metadata, file_info: dict, file_metadata_info: dict) -> Metadata:
-        metadataIO = BytesIO(metadata.to_json().encode("utf-8"))
+        metadataIO = BytesIO(metadata.to_json(private=True).encode("utf-8"))
 
-        #media = self.UPSMediaIoStreamUpload(file, mimetype, filesize, chunksize=filesize, resumable=True)
-        media = self.UPSMediaIoStreamUpload(file, metadata.mimeType, metadata.size, chunksize=metadata.size, resumable=True)
+        # chunksize must be -1 or > 0; guard zero-byte uploads so the
+        # UPSMediaIoStreamUpload constructor does not raise InvalidChunkSizeError.
+        chunksize = max(int(metadata.size), 1)
+        media = self.UPSMediaIoStreamUpload(file, metadata.mimeType, metadata.size, chunksize=chunksize, resumable=True)
         mtdata = self.MediaIoBaseUpload(metadataIO, mimetype="application/json")
         self.upload(file_info, media)
         self.upload(file_metadata_info, mtdata)
@@ -470,12 +501,8 @@ class gdrive(storage):
         
         return metadata
 
-    def download(self, fileid: str, filename: str) -> Response:
-        metadata = self.load_metadata(fileid, filename)
-        if self.cache and fileid in self.cachequeueID:
-            return send_file(self.cacheControl.get_file_path(metadata.id, metadata.name), mimetype=metadata.mimeType)
-        else:
-            return send_file(self.service.files().get_media(fileId=metadata.optional_gfileID).execute(), mimetype=metadata.mimeType)
+    def download(self, fileid: str, filename: str) -> Any:
+        raise NotImplementedError("storage.download is handled in routers/files.py for FastAPI")
 
 
 class local(storage):
@@ -504,15 +531,27 @@ class local(storage):
         return (self.root / fileid).exists()
 
     def save(self, file: LimitedStream, filesize: int, filename: str, fileid: str = "") -> Metadata:
-        fileid, mimetype, metadataname = self._save(filename, fileid)
-        folder = self.root / fileid
-        folder.mkdir(exist_ok=False)
+        # When the caller did not pin a fileid, retry on TOCTOU collisions
+        # between is_fid_exists and mkdir. With a CSPRNG and 6+ chars the
+        # collision rate is astronomically low, but a defensive retry keeps
+        # concurrent uploads from surfacing 500s on the rare race.
+        explicit_fileid = bool(fileid)
+        for attempt in range(8):
+            fileid_candidate, mimetype, metadataname = self._save(filename, fileid)
+            folder = self.root / fileid_candidate
+            try:
+                folder.mkdir(exist_ok=False)
+            except FileExistsError:
+                if explicit_fileid:
+                    raise
+                continue
 
-        metadata = self.make_metadata(filesize, filename, fileid, mimetype)
-        self.write_stream(file, folder / filename)
-        (folder / metadataname).write_text(metadata.to_json(), encoding="utf-8")
+            metadata = self.make_metadata(filesize, filename, fileid_candidate, mimetype)
+            self.write_stream(file, folder / filename)
+            (folder / metadataname).write_text(metadata.to_json(private=True), encoding="utf-8")
+            return metadata
 
-        return metadata
+        raise RuntimeError("Failed to allocate a unique fileid after retries")
     
     def remove(self, fileid: str, filename: str, deletepass: str, force: bool = False, permanently: bool = False):
         try:
@@ -544,10 +583,35 @@ class local(storage):
             metadata = self.load_metadata(fileid, filename)
         except FileNotFoundError:
             return False
-        
-        (self.root / fileid / filename).unlink()
-        (self.root / fileid / f"{filename}.metadata").unlink()
-        (self.root / fileid).rmdir()
+
+        # Move the entire folder to a tombstone path BEFORE unlinking. On
+        # POSIX, ``Path.rename`` is atomic within the same filesystem, so
+        # in-flight readers (FastAPI's FileResponse opens the FD lazily
+        # inside its handler) keep their already-opened descriptors valid
+        # even after we delete the renamed copies — and any new lookup
+        # against ``self.root / fileid`` cleanly 404s the moment the
+        # rename returns.
+        folder = self.root / fileid
+        if not folder.is_dir():
+            return False
+
+        tombstone_root = self.root / ".tombstones"
+        tombstone_root.mkdir(exist_ok=True)
+        tombstone = tombstone_root / f"{fileid}-{self._create_id(8)}"
+        try:
+            folder.rename(tombstone)
+        except FileNotFoundError:
+            return False
+
+        for entry in tombstone.iterdir():
+            try:
+                entry.unlink()
+            except FileNotFoundError:
+                pass
+        try:
+            tombstone.rmdir()
+        except OSError:
+            pass
 
         return True
     
@@ -568,10 +632,8 @@ class local(storage):
         
         return metadata
     
-    def download(self, fileid: str, filename: str) -> Response:
-        metadata = self.load_metadata(fileid, filename)
-        return send_file(self.root / fileid / filename, mimetype=metadata.mimeType)
-        #return (folder / metadata["name"]).read_bytes()
+    def download(self, fileid: str, filename: str) -> Any:
+        raise NotImplementedError("storage.download is handled in routers/files.py for FastAPI")
 
     def get_file_path(self, fileid: str, filename: str, metadata: bool = False) -> Path:
         self.load_metadata(fileid, filename)

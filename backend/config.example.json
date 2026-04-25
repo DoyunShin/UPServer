@@ -6,19 +6,24 @@
         "port": 5000,
         "domain": "https://upload.example.com/",
         "proxy": false,
+        "proxy_trusted_hosts": "127.0.0.1",
         "cdn": {
             "enabled": false,
             "url": "https://upscdn.example.com/"
         },
-        "cachetime": 600
+        "cachetime": 600,
+        "max_upload_size": 1073741824,
+        "cors_origins": [],
+        "admin_token": ""
     },
     "delete": {
         "enabled": true,
-        "after": 3600,
-        "permanently": false
+        "after": 604800,
+        "permanently": false,
+        "reaper_interval": 3600
     },
     "folderidlength": 6,
-    "deletelength": 8,
+    "ownerkeylength": 12,
     "chunk": 104857600,
     "log": "",
     "gdrive": {

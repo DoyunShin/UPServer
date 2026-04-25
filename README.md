@@ -15,3 +15,6 @@ Then you will get a URL like:
 ```
 https://upserver.example.com/abc123/myfile.txt
 ```
+
+## Use in docker
+
