@@ -1,0 +1,100 @@
+name: Release Docker image to ghcr.io
+
+on:
+  push:
+    tags: ["v*.*.*"]
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+  PYPI_PACKAGE_NAME: ory-upserver
+
+# Default to no implicit permissions; the build job opts back into the
+# minimum it needs.
+permissions: {}
+
+jobs:
+  wait-for-pypi:
+    name: Wait for PyPI release to propagate
+    runs-on: ubuntu-latest
+    steps:
+      - name: Poll PyPI JSON API for the matching release
+        env:
+          # GITHUB_REF_NAME for a tag push is the bare tag (e.g. ``v1.0.2``).
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          set -u
+          version="${REF_NAME#v}"
+          url="https://pypi.org/pypi/${PYPI_PACKAGE_NAME}/${version}/json"
+          echo "::notice::Waiting for ${PYPI_PACKAGE_NAME}==${version} on PyPI"
+          echo "URL: ${url}"
+
+          # 90 * 20s = 30 minutes max wait. cd.yaml typically finishes the
+          # OIDC publish within a few minutes; the extra slack covers PyPI
+          # CDN propagation and CI queue cold starts.
+          attempts=90
+          for i in $(seq 1 ${attempts}); do
+            code=$(curl -fsSL -o /dev/null -w '%{http_code}' "${url}" || echo 000)
+            case "${code}" in
+              200)
+                echo "Attempt ${i}: 200 — release is live on PyPI."
+                exit 0
+                ;;
+              404)
+                echo "Attempt ${i}/${attempts}: not yet on PyPI; sleeping 20s..."
+                ;;
+              *)
+                echo "Attempt ${i}/${attempts}: transient HTTP ${code}; sleeping 20s..."
+                ;;
+            esac
+            sleep 20
+          done
+
+          echo "::error::PyPI release ${PYPI_PACKAGE_NAME}==${version} did not appear within $((attempts * 20)) seconds."
+          exit 1
+
+  build:
+    name: Build and push Docker image
+    needs: wait-for-pypi
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Compute image metadata
+        id: metadata
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          # Tag the image with the full semver, the major.minor channel,
+          # and ``latest`` only for clean stable releases (no rc/a/b/dev).
+          tags: |
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=raw,value=latest,enable=${{ !contains(github.ref_name, 'rc') && !contains(github.ref_name, 'a') && !contains(github.ref_name, 'b') && !contains(github.ref_name, 'dev') }}
+
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ./Dockerfile
+          push: true
+          tags: ${{ steps.metadata.outputs.tags }}
+          labels: ${{ steps.metadata.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
