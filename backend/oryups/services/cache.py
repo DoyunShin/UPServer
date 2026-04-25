@@ -8,7 +8,25 @@ from oryups.filesystem import Metadata
 from oryups.utils.expiry import is_expired
 
 _cache: dict[str, dict] = {}
+_tombstones: dict[str, float] = {}
 _cache_lock: threading.Lock = threading.Lock()
+
+
+def _tombstone_ttl() -> int:
+    """How long an invalidated fileid blocks new cache stores.
+
+    Matches ``host.cachetime`` so any stale read whose storage call
+    started before the corresponding ``invalidate`` cannot survive past
+    the moment its cache entry would have naturally expired.
+    """
+    return int(get_config()["host"].get("cachetime", 600))
+
+
+def _prune_tombstones_locked(now: float) -> None:
+    """Drop expired tombstone entries. Caller must hold ``_cache_lock``."""
+    expired = [fileid for fileid, deadline in _tombstones.items() if deadline <= now]
+    for fileid in expired:
+        _tombstones.pop(fileid, None)
 
 
 def _redacted_copy(metadata: Metadata) -> Metadata:
@@ -25,10 +43,20 @@ def _redacted_copy(metadata: Metadata) -> Metadata:
 
 
 def store_cache(metadata: Metadata) -> None:
-    """Cache a redacted copy of metadata keyed by file id."""
+    """Cache a redacted copy of metadata keyed by file id.
+
+    Skips the store entirely when the fileid is currently tombstoned —
+    that means a concurrent ``invalidate`` (typically a DELETE) ran
+    between the storage read and this commit, and accepting the entry
+    would poison the cache with metadata for an already-removed file.
+    """
+    now = time.time()
     with _cache_lock:
+        _prune_tombstones_locked(now)
+        if metadata.id in _tombstones:
+            return
         _cache[metadata.id] = {
-            "time": int(time.time()),
+            "time": int(now),
             "metadata": _redacted_copy(metadata),
         }
 
@@ -58,20 +86,31 @@ def get_cache(fileid: str, filename: str) -> Optional[Metadata]:
 
 
 def clear_cache() -> None:
-    """Evict all expired cache entries."""
+    """Evict all expired cache entries and tombstones."""
     cachetime = get_config()["host"]["cachetime"]
-    now = int(time.time())
+    now = time.time()
     with _cache_lock:
         for fileid in list(_cache.keys()):
             entry = _cache.get(fileid)
             if entry is not None and entry["time"] + cachetime < now:
                 _cache.pop(fileid, None)
+        _prune_tombstones_locked(now)
 
 
 def invalidate(fileid: str) -> None:
-    """Drop a single file's cached metadata, if any."""
+    """Drop a file's cached metadata and tombstone the fileid.
+
+    The tombstone blocks concurrent readers (whose storage I/O began
+    before this call) from later writing a stale cache entry. The
+    tombstone TTL matches ``host.cachetime`` so any in-flight read is
+    safely contained.
+    """
+    now = time.time()
+    deadline = now + _tombstone_ttl()
     with _cache_lock:
+        _prune_tombstones_locked(now)
         _cache.pop(fileid, None)
+        _tombstones[fileid] = deadline
 
 
 def load_metadata(fileid: str, filename: str) -> Metadata:
