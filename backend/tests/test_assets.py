@@ -4,10 +4,10 @@ from fastapi.testclient import TestClient
 
 
 def test_existing_asset_served(client: TestClient) -> None:
-    response = client.get("/assets/bootstrap/css/bootstrap.min.css")
+    response = client.get("/assets/img/favicon.svg")
 
     assert response.status_code == 200
-    assert "text/css" in response.headers["content-type"]
+    assert "image/svg" in response.headers["content-type"]
     assert response.content
 
 
