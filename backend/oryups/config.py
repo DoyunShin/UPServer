@@ -56,8 +56,34 @@ def load_config(path: Optional[Path] = None) -> dict:
     if storage_name not in filesystem.storageTypes:
         raise ValueError(f"Invalid storage type: {storage_name}")
 
+    _validate_runtime_config(_config)
+
     _storage = getattr(filesystem, storage_name)(_config, _config_path)
     return _config
+
+
+_PLACEHOLDER_DOMAINS = {
+    "https://upload.example.com/",
+    "https://upload.example.com",
+    "http://upload.example.com/",
+    "http://upload.example.com",
+}
+
+
+def _validate_runtime_config(config: dict) -> None:
+    """Refuse to start with example placeholders that would mislead users.
+
+    ``host.domain`` is concatenated into share URLs returned by PUT, so a
+    forgotten placeholder silently sends every uploader to a third-party
+    host. Fail loudly at startup instead of in production.
+    """
+    domain = (config.get("host", {}).get("domain") or "").strip()
+    if domain in _PLACEHOLDER_DOMAINS:
+        raise RuntimeError(
+            f"host.domain is still set to the example placeholder ({domain!r}). "
+            "Set it to your real public origin (https://your-host.example/) "
+            "before starting the server."
+        )
 
 
 def get_config() -> dict:
