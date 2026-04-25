@@ -2,7 +2,7 @@ services:
   upserver:
     build: .
     ports:
-      - "8000:80"
+      - "8400:80"
     volumes:
       - ./backend/config.json:/app/config.json:ro
       - upload-data:/app/upload-data

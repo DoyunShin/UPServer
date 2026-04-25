@@ -39,7 +39,7 @@ def test_metadata_endpoint_returns_uploaded_metadata(client: TestClient) -> None
     assert data["hidden"] is False
     assert isinstance(data["created_at"], int | float)
     assert data["delete_after"] == 3600.0
-    assert "delete" in data
+    assert "delete" not in data
 
 
 def test_metadata_missing_returns_envelope_for_browser(client: TestClient) -> None:
