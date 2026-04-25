@@ -47,7 +47,7 @@ def test_upload_browser_returns_owner_key(client: TestClient) -> None:
     assert response.status_code == 200
     owner_key = response.headers.get("X-Owner-Key")
     assert owner_key is not None
-    assert len(owner_key) == 8
+    assert len(owner_key) == 12
     allowed = set(string.ascii_letters + string.digits)
     assert set(owner_key).issubset(allowed)
 

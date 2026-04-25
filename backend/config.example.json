@@ -23,7 +23,7 @@
         "reaper_interval": 3600
     },
     "folderidlength": 6,
-    "deletelength": 8,
+    "ownerkeylength": 12,
     "chunk": 104857600,
     "log": "",
     "gdrive": {

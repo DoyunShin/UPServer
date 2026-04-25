@@ -68,13 +68,13 @@ class Metadata:
 
 class storage():
     folderidlength: int
-    deletelength: int
+    ownerkeylength: int
     chunksize: int
     cache: bool
 
     def __init__(self, config: dict, configPath: Path):
         self.folderidlength = config["folderidlength"]
-        self.deletelength = config["deletelength"]
+        self.ownerkeylength = config["ownerkeylength"]
         self.chunksize = config["chunk"]
         
         if "delete" in config:
@@ -135,7 +135,7 @@ class storage():
         metadata.name = filename
         metadata.mimeType = mimetype
         metadata.size = filesize
-        metadata.delete = self._create_id(self.deletelength)
+        metadata.delete = self._create_id(self.ownerkeylength)
         metadata.hidden = False
         metadata.created_at = int(time.time())
 
