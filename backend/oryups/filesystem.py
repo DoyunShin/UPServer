@@ -4,8 +4,8 @@ from mimetypes import guess_type
 from threading import Thread
 from io import BytesIO
 from typing import IO, Any
+import secrets
 import string
-import random
 import time
 
 LimitedStream = Any
@@ -121,7 +121,8 @@ class storage():
 
 
     def _create_id(self, length: int) -> str:
-        return ''.join(random.choices(string.ascii_letters+ string.digits, k=length))
+        alphabet = string.ascii_letters + string.digits
+        return ''.join(secrets.choice(alphabet) for _ in range(length))
     
     def create_fileid(self) -> str:
         folderid = self._create_id(self.folderidlength)
