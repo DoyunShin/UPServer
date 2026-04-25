@@ -64,7 +64,9 @@ def _reap_local(storage: LocalStorage, delete_rule: dict) -> int:
         return 0
 
     for folder in entries:
-        if not folder.is_dir() or folder.name == "delete":
+        if not folder.is_dir():
+            continue
+        if folder.name == "delete" or folder.name.startswith("."):
             continue
         metadata_path = _find_metadata_path(folder)
         if metadata_path is None:

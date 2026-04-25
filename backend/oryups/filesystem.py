@@ -531,15 +531,27 @@ class local(storage):
         return (self.root / fileid).exists()
 
     def save(self, file: LimitedStream, filesize: int, filename: str, fileid: str = "") -> Metadata:
-        fileid, mimetype, metadataname = self._save(filename, fileid)
-        folder = self.root / fileid
-        folder.mkdir(exist_ok=False)
+        # When the caller did not pin a fileid, retry on TOCTOU collisions
+        # between is_fid_exists and mkdir. With a CSPRNG and 6+ chars the
+        # collision rate is astronomically low, but a defensive retry keeps
+        # concurrent uploads from surfacing 500s on the rare race.
+        explicit_fileid = bool(fileid)
+        for attempt in range(8):
+            fileid_candidate, mimetype, metadataname = self._save(filename, fileid)
+            folder = self.root / fileid_candidate
+            try:
+                folder.mkdir(exist_ok=False)
+            except FileExistsError:
+                if explicit_fileid:
+                    raise
+                continue
 
-        metadata = self.make_metadata(filesize, filename, fileid, mimetype)
-        self.write_stream(file, folder / filename)
-        (folder / metadataname).write_text(metadata.to_json(private=True), encoding="utf-8")
+            metadata = self.make_metadata(filesize, filename, fileid_candidate, mimetype)
+            self.write_stream(file, folder / filename)
+            (folder / metadataname).write_text(metadata.to_json(private=True), encoding="utf-8")
+            return metadata
 
-        return metadata
+        raise RuntimeError("Failed to allocate a unique fileid after retries")
     
     def remove(self, fileid: str, filename: str, deletepass: str, force: bool = False, permanently: bool = False):
         try:
@@ -571,10 +583,35 @@ class local(storage):
             metadata = self.load_metadata(fileid, filename)
         except FileNotFoundError:
             return False
-        
-        (self.root / fileid / filename).unlink()
-        (self.root / fileid / f"{filename}.metadata").unlink()
-        (self.root / fileid).rmdir()
+
+        # Move the entire folder to a tombstone path BEFORE unlinking. On
+        # POSIX, ``Path.rename`` is atomic within the same filesystem, so
+        # in-flight readers (FastAPI's FileResponse opens the FD lazily
+        # inside its handler) keep their already-opened descriptors valid
+        # even after we delete the renamed copies — and any new lookup
+        # against ``self.root / fileid`` cleanly 404s the moment the
+        # rename returns.
+        folder = self.root / fileid
+        if not folder.is_dir():
+            return False
+
+        tombstone_root = self.root / ".tombstones"
+        tombstone_root.mkdir(exist_ok=True)
+        tombstone = tombstone_root / f"{fileid}-{self._create_id(8)}"
+        try:
+            folder.rename(tombstone)
+        except FileNotFoundError:
+            return False
+
+        for entry in tombstone.iterdir():
+            try:
+                entry.unlink()
+            except FileNotFoundError:
+                pass
+        try:
+            tombstone.rmdir()
+        except OSError:
+            pass
 
         return True
     
