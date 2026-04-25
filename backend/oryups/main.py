@@ -7,11 +7,36 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse, Response
+from starlette.middleware.base import BaseHTTPMiddleware
 
 from oryups.config import STATIC_DIR, get_config, load_config
 from oryups.response import make_response
 from oryups.routers import api, api_v1, assets, files, root
 from oryups.services.reaper import run_reaper
+
+
+_BASELINE_SECURITY_HEADERS: dict[str, str] = {
+    "X-Content-Type-Options": "nosniff",
+    "X-Frame-Options": "SAMEORIGIN",
+    "Referrer-Policy": "strict-origin-when-cross-origin",
+    "Permissions-Policy": "interest-cohort=()",
+}
+
+
+class SecurityHeadersMiddleware(BaseHTTPMiddleware):
+    """Attach a baseline set of defensive headers to every response.
+
+    The headers harden against MIME sniffing, clickjacking via iframe
+    embedding, referrer leakage to third-party hosts, and FLoC-style
+    cohort tracking. They're set after the inner app runs so we never
+    overwrite headers an endpoint deliberately customized.
+    """
+
+    async def dispatch(self, request, call_next):
+        response = await call_next(request)
+        for header, value in _BASELINE_SECURITY_HEADERS.items():
+            response.headers.setdefault(header, value)
+        return response
 
 
 def _configure_middleware(app: FastAPI, config: dict) -> None:
@@ -87,6 +112,7 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="UPServer", lifespan=lifespan)
+app.add_middleware(SecurityHeadersMiddleware)
 
 app.include_router(api.router)
 app.include_router(api_v1.router)
