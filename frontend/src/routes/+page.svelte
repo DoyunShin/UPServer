@@ -2,6 +2,7 @@
   import { onMount } from 'svelte';
   import { uploadFile, APIError } from '$lib/api';
   import { setOwnerKey } from '$lib/stores/owner';
+  import { formatBytesProgress } from '$lib/utils/format';
 
   type Status = 'idle' | 'uploading' | 'success' | 'error';
 
@@ -16,6 +17,8 @@
   let dragging = false;
   let status: Status = 'idle';
   let progress = 0;
+  let uploadedBytes = 0;
+  let totalBytes = 0;
   let currentName = 'hello.txt';
   let errorMessage = '';
   let result: UploadResultUI | null = null;
@@ -78,12 +81,16 @@
     currentName = file.name;
     status = 'uploading';
     progress = 0;
+    uploadedBytes = 0;
+    totalBytes = file.size;
     errorMessage = '';
     result = null;
     keyRevealed = false;
     keyCopied = false;
 
     const handle = uploadFile(file, (loaded, total) => {
+      uploadedBytes = loaded;
+      totalBytes = total;
       progress = total > 0 ? Math.round((loaded / total) * 100) : 0;
     });
     try {
@@ -117,6 +124,8 @@
     result = null;
     currentName = 'hello.txt';
     progress = 0;
+    uploadedBytes = 0;
+    totalBytes = 0;
     errorMessage = '';
     keyRevealed = false;
     keyCopied = false;
@@ -269,8 +278,8 @@
         role="presentation"
       >
         {#if status === 'uploading'}
-          <h1 class="drop-title">{progress}%</h1>
-          <p class="drop-sub">Uploading {currentName}…</p>
+          <h1 class="drop-title">{formatBytesProgress(uploadedBytes, totalBytes)}</h1>
+          <p class="drop-sub">Uploading {currentName}… ({progress}%)</p>
         {:else}
           <h1 class="drop-title">Drag a file here</h1>
           <p class="drop-sub">
@@ -360,6 +369,11 @@
     line-height: 1.1;
     letter-spacing: -0.025em;
     margin: 0 0 12px;
+  }
+  .dropzone.uploading .drop-title {
+    font-size: 44px;
+    font-variant-numeric: tabular-nums;
+    font-feature-settings: 'tnum' 1;
   }
   .drop-sub {
     font-size: 16px;
@@ -505,6 +519,9 @@
   @media (max-width: 600px) {
     .drop-title {
       font-size: 36px;
+    }
+    .dropzone.uploading .drop-title {
+      font-size: 28px;
     }
     .drop-sub {
       font-size: 14px;
