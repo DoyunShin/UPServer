@@ -22,7 +22,7 @@ WORKDIR /app
 
 COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
 
-COPY backend/pyproject.toml ./
+COPY backend/pyproject.toml backend/README.md ./
 COPY backend/uv.lock* ./
 COPY backend/oryups ./oryups
 RUN uv sync --no-dev

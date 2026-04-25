@@ -1,8 +1,24 @@
 [project]
 name = "ory-upserver"
-version = "0.1.0"
-description = "Simple upload server backend (FastAPI)"
+version = "1.0.0rc0"
+description = "Simple upload server with FastAPI backend and bundled SvelteKit frontend"
+readme = "README.md"
+license = { text = "MIT" }
+authors = [{ name = "DoyunShin" }]
 requires-python = ">=3.11"
+keywords = ["upload", "fileserver", "fastapi", "self-hosted"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Framework :: FastAPI",
+    "Intended Audience :: System Administrators",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: POSIX :: Linux",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Internet :: WWW/HTTP :: HTTP Servers",
+]
 dependencies = [
     "fastapi>=0.110",
     "uvicorn[standard]>=0.27",
@@ -12,6 +28,11 @@ dependencies = [
     "prompt-toolkit",
 ]
 
+[project.urls]
+Homepage = "https://github.com/DoyunShin/UPServer"
+Source = "https://github.com/DoyunShin/UPServer"
+Issues = "https://github.com/DoyunShin/UPServer/issues"
+
 [project.scripts]
 ups = "oryups.cli:main"
 
@@ -20,7 +41,17 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
+# All static files (the SvelteKit build under oryups/static/ and the bundled
+# config example shipped at oryups/config.example.json) live inside the
+# package, so hatchling picks them up automatically.
 packages = ["oryups"]
+
+[tool.hatch.build.targets.sdist]
+include = [
+    "oryups/**",
+    "tests/**",
+    "README.md",
+]
 
 [dependency-groups]
 dev = [

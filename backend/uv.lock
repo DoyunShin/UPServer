@@ -498,7 +498,7 @@ wheels = [
 
 [[package]]
 name = "ory-upserver"
-version = "0.1.0"
+version = "1.0.0rc0"
 source = { editable = "." }
 dependencies = [
     { name = "fastapi" },

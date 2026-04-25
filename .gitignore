@@ -138,3 +138,8 @@ app.wsgi
 .codex
 
 tmp/
+
+# Build-time staging copy populated by .github/workflows/cd.yaml so the
+# bundled config example ships inside the wheel without a hatch hook.
+# The canonical example lives at backend/config.example.json.
+/backend/oryups/config.example.json
