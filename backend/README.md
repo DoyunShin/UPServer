@@ -39,4 +39,4 @@ ups --config /path/to/config.json
 
 ## License
 
-MIT.
+Apache-2.0. See `LICENSE` (bundled with the wheel) for the full text.
