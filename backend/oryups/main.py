@@ -31,6 +31,7 @@ def _configure_middleware(app: FastAPI, config: dict) -> None:
                 allow_credentials=False,
                 allow_methods=["*"],
                 allow_headers=["*"],
+                expose_headers=["X-Owner-Key"],
             )
         else:
             app.add_middleware(
@@ -39,6 +40,7 @@ def _configure_middleware(app: FastAPI, config: dict) -> None:
                 allow_credentials=True,
                 allow_methods=["*"],
                 allow_headers=["*"],
+                expose_headers=["X-Owner-Key"],
             )
 
     if config["host"].get("proxy", False):
