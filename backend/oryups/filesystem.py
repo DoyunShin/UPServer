@@ -74,7 +74,19 @@ class storage():
 
     def __init__(self, config: dict, configPath: Path):
         self.folderidlength = config["folderidlength"]
-        self.ownerkeylength = config["ownerkeylength"]
+        # ``deletelength`` is the pre-1.0.0 spelling. We prefer the new
+        # ``ownerkeylength`` but fall back so existing deployments don't
+        # need to edit their config.json on upgrade.
+        if "ownerkeylength" in config:
+            self.ownerkeylength = int(config["ownerkeylength"])
+        elif "deletelength" in config:
+            self.ownerkeylength = int(config["deletelength"])
+            print(
+                "WARNING: 'deletelength' in config.json is deprecated; "
+                "rename it to 'ownerkeylength'."
+            )
+        else:
+            self.ownerkeylength = 12
         self.chunksize = config["chunk"]
         
         if "delete" in config:
