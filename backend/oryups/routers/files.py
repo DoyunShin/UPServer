@@ -27,6 +27,53 @@ from oryups.utils.validation import (
 DEFAULT_MAX_UPLOAD_SIZE: int = 1 << 30
 GDRIVE_STREAM_CHUNK: int = 8 * 1024 * 1024
 
+# Mime types that browsers can render same-origin and that have been used as
+# reflected-XSS vectors when served from user uploads. We always downgrade
+# these on the download path.
+_DANGEROUS_DOWNLOAD_MIMES: frozenset[str] = frozenset({
+    "text/html",
+    "application/xhtml+xml",
+    "image/svg+xml",
+    "application/javascript",
+    "text/javascript",
+    "application/x-javascript",
+    "application/xml",
+    "text/xml",
+})
+
+_SAFE_DOWNLOAD_MIME: str = "application/octet-stream"
+
+
+def _content_disposition(filename: str) -> str:
+    r"""Build a safe ``Content-Disposition: attachment`` header value.
+
+    Always emits both the legacy quoted ``filename="..."`` and the
+    RFC 5987 ``filename*=UTF-8''...`` so non-ASCII names render in modern
+    browsers. The legacy form is escaped against header injection by
+    backslash-escaping ``\`` and ``"`` and stripping CR/LF.
+    """
+    from urllib.parse import quote
+
+    legacy = filename.replace("\\", "\\\\").replace('"', '\\"').replace("\r", "").replace("\n", "")
+    encoded = quote(filename, safe="")
+    return f'attachment; filename="{legacy}"; filename*=UTF-8\'\'{encoded}'
+
+
+def _safe_download_mime(raw: str | None) -> str:
+    """Return a safe Content-Type for serving uploaded bytes.
+
+    Strips any parameters (charset, boundary) before comparing to the
+    deny-list, then falls back to ``application/octet-stream`` when the
+    mime is dangerous, missing, or malformed.
+    """
+    if not raw:
+        return _SAFE_DOWNLOAD_MIME
+    base = raw.split(";", 1)[0].strip().lower()
+    if not base or base in _DANGEROUS_DOWNLOAD_MIMES:
+        return _SAFE_DOWNLOAD_MIME
+    return base
+
+
 router = APIRouter(tags=["Files"])
 
 
@@ -87,7 +134,13 @@ async def _download_response(fileid: str, filename: str) -> Response:
         if storage.cache and storage.is_cached(fileid, filename):
             cached_path = storage.get_cached(fileid, filename)
             metadata = await _load_metadata(fileid, filename)
-            return FileResponse(cached_path, media_type=metadata.mimeType, filename=metadata.name)
+            safe_mime = _safe_download_mime(metadata.mimeType)
+            return FileResponse(
+                cached_path,
+                media_type=safe_mime,
+                filename=metadata.name,
+                content_disposition_type="attachment",
+            )
 
         if config["host"]["cdn"]["enabled"]:
             cdn_url = config["host"]["cdn"]["url"].rstrip("/")
@@ -95,17 +148,24 @@ async def _download_response(fileid: str, filename: str) -> Response:
 
         metadata = await _load_metadata(fileid, filename)
         storage_name = config["storage"]
+        safe_mime = _safe_download_mime(metadata.mimeType)
 
         if storage_name == "local":
             file_path = storage.root / fileid / filename
             if not file_path.is_file():
                 raise FileNotFoundError(f"{fileid}/{filename}")
-            return FileResponse(file_path, media_type=metadata.mimeType, filename=metadata.name)
+            return FileResponse(
+                file_path,
+                media_type=safe_mime,
+                filename=metadata.name,
+                content_disposition_type="attachment",
+            )
 
         if storage_name == "gdrive":
             return StreamingResponse(
                 _stream_gdrive(storage, metadata.optional_gfileID),
-                media_type=metadata.mimeType,
+                media_type=safe_mime,
+                headers={"Content-Disposition": _content_disposition(metadata.name)},
             )
 
         raise HTTPException(status_code=500, detail="Unknown storage backend")
