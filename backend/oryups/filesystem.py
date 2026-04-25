@@ -25,7 +25,7 @@ class Metadata:
     optional_parentfolderID: str
     optional_gfileID: str
 
-    def to_dict(self, public: bool = False):
+    def to_dict(self, private: bool = False):
         data = {
             "id": self.id,
             "name": self.name,
@@ -36,13 +36,13 @@ class Metadata:
             "delete_after": self.delete_after
         }
 
-        if not public:
+        if private:
             data["delete"] = self.delete
 
         return data
-    
-    def to_json(self, ensure_ascii: bool = False, indent: int = 0, public: bool = False):
-        return dumps(self.to_dict(public=public), ensure_ascii=ensure_ascii, indent=indent)
+
+    def to_json(self, ensure_ascii: bool = False, indent: int = 0, private: bool = False):
+        return dumps(self.to_dict(private=private), ensure_ascii=ensure_ascii, indent=indent)
     
     def load(self, data: dict = {}, dataraw: str = "", dataPath: Path = Path()):
         if data:
@@ -456,7 +456,7 @@ class gdrive(storage):
         return metadata
 
     def save_BytesIO(self, file: LimitedStream, metadata: Metadata, file_info: dict, file_metadata_info: dict) -> Metadata:
-        metadataIO = BytesIO(metadata.to_json().encode("utf-8"))
+        metadataIO = BytesIO(metadata.to_json(private=True).encode("utf-8"))
 
         # chunksize must be -1 or > 0; guard zero-byte uploads so the
         # UPSMediaIoStreamUpload constructor does not raise InvalidChunkSizeError.
@@ -536,7 +536,7 @@ class local(storage):
 
         metadata = self.make_metadata(filesize, filename, fileid, mimetype)
         self.write_stream(file, folder / filename)
-        (folder / metadataname).write_text(metadata.to_json(), encoding="utf-8")
+        (folder / metadataname).write_text(metadata.to_json(private=True), encoding="utf-8")
 
         return metadata
     

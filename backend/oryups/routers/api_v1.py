@@ -141,4 +141,4 @@ async def get_metadata(fileid: str, filename: str) -> JSONResponse:
         metadata = await run_in_threadpool(cache.load_metadata, fileid, filename)
     except FileNotFoundError:
         raise HTTPException(status_code=404, detail="Not Found!")
-    return make_response(200, "OK", metadata.to_dict(public=True))
+    return make_response(200, "OK", metadata.to_dict())
