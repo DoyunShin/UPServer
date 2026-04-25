@@ -1,3 +1,4 @@
+import copy
 import threading
 import time
 from typing import Optional
@@ -10,10 +11,26 @@ _cache: dict[str, dict] = {}
 _cache_lock: threading.Lock = threading.Lock()
 
 
+def _redacted_copy(metadata: Metadata) -> Metadata:
+    """Return a shallow copy of metadata with the owner key cleared.
+
+    Cache entries must never carry the owner key. Storage layers (especially
+    the gdrive queue) hold the same Metadata instance and rely on its
+    ``delete`` field surviving until the upload is durably written, so we
+    must never mutate the caller's object.
+    """
+    redacted = copy.copy(metadata)
+    redacted.delete = ""
+    return redacted
+
+
 def store_cache(metadata: Metadata) -> None:
-    """Cache metadata by file id with a timestamp."""
+    """Cache a redacted copy of metadata keyed by file id."""
     with _cache_lock:
-        _cache[metadata.id] = {"time": int(time.time()), "metadata": metadata}
+        _cache[metadata.id] = {
+            "time": int(time.time()),
+            "metadata": _redacted_copy(metadata),
+        }
 
 
 def get_cache(fileid: str, filename: str) -> Optional[Metadata]:
@@ -74,8 +91,8 @@ def load_metadata(fileid: str, filename: str) -> Metadata:
     metadata = get_cache(fileid, filename)
     if metadata is None:
         metadata = get_storage().load_metadata(fileid, filename)
-        metadata.delete = ""
         store_cache(metadata)
+        metadata = get_cache(fileid, filename) or _redacted_copy(metadata)
 
     if is_expired(metadata, get_config().get("delete", {})):
         with _cache_lock:
