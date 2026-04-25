@@ -42,6 +42,10 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
 def _configure_middleware(app: FastAPI, config: dict) -> None:
     """Attach CORS/Proxy middleware based on loaded configuration.
 
+    Must be called BEFORE the first request reaches the app — Starlette
+    locks the middleware stack on first ASGI invocation (lifespan startup
+    counts), so this happens at module import time, not in the lifespan.
+
     Safe defaults: if ``host.cors_origins`` is empty, no CORS middleware is
     installed; if it's ``["*"]``, credentials are disabled per the Fetch
     specification. Proxy-header trust is limited to ``host.proxy_trusted_hosts``
@@ -75,18 +79,47 @@ def _configure_middleware(app: FastAPI, config: dict) -> None:
         app.add_middleware(ProxyHeadersMiddleware, trusted_hosts=trusted)
 
 
+def _config_for_module_setup() -> Optional[dict]:
+    """Return a loaded config for module-level middleware wiring, if available.
+
+    Two scenarios:
+      * CLI launch (``ups`` or any caller that pre-loads via ``load_config``
+        before importing this module) — :func:`get_config` returns the
+        cached dict and we wire CORS / proxy headers on the spot.
+      * Tests / cold imports — config has not been loaded yet; we return
+        ``None`` and skip dynamic middleware. Tests don't exercise CORS or
+        proxy headers, and the lifespan still loads config for the reaper.
+
+    We deliberately do NOT call :func:`load_config` from here: that would
+    eagerly resolve the default config path (or ``UPSERVER_CONFIG`` env
+    var) at import time and trigger storage initialization side effects
+    (e.g. creating ``local.root``) before the runtime is even configured.
+    Operators running ``uvicorn oryups.main:app`` directly without CLI
+    pre-loading should set ``UPSERVER_CONFIG`` AND import-load the config
+    in their own bootstrap code, mirroring what the ``ups`` CLI does.
+    """
+    try:
+        return get_config()
+    except RuntimeError:
+        return None
+
+
 _reaper_task: Optional[asyncio.Task] = None
 _reaper_stop: Optional[asyncio.Event] = None
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Load configuration, initialize middleware, and manage the reaper task."""
+    """Load configuration (if not already) and manage the reaper task.
+
+    Middleware is installed at module import time, not here — Starlette
+    locks the middleware stack once the lifespan starts, so any
+    ``app.add_middleware`` call from this scope raises.
+    """
     global _reaper_task, _reaper_stop
 
     load_config()
     cfg = get_config()
-    _configure_middleware(app, cfg)
 
     delete_rule = cfg.get("delete", {})
     if delete_rule.get("enabled") and delete_rule.get("permanently"):
@@ -113,6 +146,10 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="UPServer", lifespan=lifespan)
 app.add_middleware(SecurityHeadersMiddleware)
+
+_module_cfg = _config_for_module_setup()
+if _module_cfg is not None:
+    _configure_middleware(app, _module_cfg)
 
 app.include_router(api.router)
 app.include_router(api_v1.router)
