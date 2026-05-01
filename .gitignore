@@ -134,6 +134,12 @@ uploads/
 gdrive.py
 app.wsgi
 
+# Built SvelteKit bundle. CI (.github/workflows/cd.yaml) rebuilds this
+# from frontend/ before packaging the wheel, so the committed copy is
+# unnecessary churn. Run `npm run build` in frontend/ for local dev or
+# non-Docker installs.
+backend/oryups/static/
+
 # codex plugin marker
 .codex
 
