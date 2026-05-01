@@ -37,4 +37,17 @@ def test_error_handler_returns_html_for_browser(client: TestClient) -> None:
     assert response.status_code == 404
     assert "text/html" in response.headers["content-type"]
     assert "404" in response.text
-    assert "Not Found!" in response.text
+    assert "File not found" in response.text
+
+
+def test_error_handler_renders_page_not_found_for_unknown_route(
+    client: TestClient,
+) -> None:
+    response = client.get(
+        "/no-such-page",
+        headers={"user-agent": "Mozilla/5.0"},
+    )
+
+    assert response.status_code == 404
+    assert "text/html" in response.headers["content-type"]
+    assert "Page not found" in response.text

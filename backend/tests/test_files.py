@@ -55,7 +55,7 @@ def test_direct_get_missing_returns_html_404(client: TestClient) -> None:
     assert response.status_code == 404
     assert "text/html" in response.headers["content-type"]
     assert "404" in response.text
-    assert "Not Found!" in response.text
+    assert "not found" in response.text.lower()
 
 
 def test_share_page_browser_returns_index_html(client: TestClient) -> None:
@@ -93,7 +93,7 @@ def test_share_page_wrong_fileid_length_returns_html_404(client: TestClient) -> 
     assert response.status_code == 404
     assert "text/html" in response.headers["content-type"]
     assert "404" in response.text
-    assert "Not Found!" in response.text
+    assert "not found" in response.text.lower()
 
 
 def test_share_page_missing_valid_length_id_returns_html_404(client: TestClient) -> None:
@@ -105,4 +105,4 @@ def test_share_page_missing_valid_length_id_returns_html_404(client: TestClient)
     assert response.status_code == 404
     assert "text/html" in response.headers["content-type"]
     assert "404" in response.text
-    assert "Not Found!" in response.text
+    assert "not found" in response.text.lower()

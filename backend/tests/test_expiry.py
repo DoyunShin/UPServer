@@ -59,7 +59,7 @@ def test_upload_browser_returns_owner_key(client: TestClient) -> None:
 def test_delete_requires_owner_key(client: TestClient) -> None:
     fileid, _ = upload_file(client, "tokill.txt", b"payload")
 
-    response = client.delete(f"/{fileid}/tokill.txt")
+    response = client.delete(f"/api/v1/{fileid}/tokill.txt")
 
     assert response.status_code == 403
     assert response.json() == {"status": 403, "message": "Forbidden", "data": None}
@@ -72,7 +72,7 @@ def test_delete_rejects_wrong_owner_key(
     fileid, _ = upload_file(client, "tokill2.txt", b"payload")
 
     response = client.delete(
-        f"/{fileid}/tokill2.txt",
+        f"/api/v1/{fileid}/tokill2.txt",
         headers={"X-Owner-Key": "00000000"},
     )
 
@@ -95,7 +95,7 @@ def test_delete_with_correct_owner_key_removes_file(
     fileid = put_response.text.rstrip("/").split("/")[-2]
 
     delete_response = client.delete(
-        f"/{fileid}/deleteme.txt",
+        f"/api/v1/{fileid}/deleteme.txt",
         headers={"X-Owner-Key": owner_key},
     )
 

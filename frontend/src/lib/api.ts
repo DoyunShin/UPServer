@@ -116,10 +116,13 @@ export async function deleteFile(
   ownerKey: string,
   fetcher: typeof fetch = fetch
 ): Promise<void> {
-  const res = await fetcher(`/${encodeURIComponent(fileid)}/${encodeURIComponent(filename)}`, {
-    method: 'DELETE',
-    headers: { 'X-Owner-Key': ownerKey }
-  });
+  const res = await fetcher(
+    `/api/v1/${encodeURIComponent(fileid)}/${encodeURIComponent(filename)}`,
+    {
+      method: 'DELETE',
+      headers: { 'X-Owner-Key': ownerKey }
+    }
+  );
   let body: APIResponse<null> | null = null;
   try {
     body = (await res.json()) as APIResponse<null>;
@@ -167,6 +170,30 @@ export async function adminLogout(
     method: 'POST',
     headers: { Authorization: `Bearer ${token}` }
   });
+}
+
+export async function adminDeleteFile(
+  fileid: string,
+  filename: string,
+  token: string,
+  fetcher: typeof fetch = fetch
+): Promise<void> {
+  const res = await fetcher(
+    `/api/v1/${encodeURIComponent(fileid)}/${encodeURIComponent(filename)}`,
+    {
+      method: 'DELETE',
+      headers: { Authorization: `Bearer ${token}` }
+    }
+  );
+  let body: APIResponse<null> | null = null;
+  try {
+    body = (await res.json()) as APIResponse<null>;
+  } catch {
+    /* envelope optional on some error paths */
+  }
+  if (!res.ok || (body && body.status !== 200)) {
+    throw new APIError(body?.status ?? res.status, body?.message ?? res.statusText);
+  }
 }
 
 export interface UploadHandle {

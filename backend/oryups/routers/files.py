@@ -16,7 +16,7 @@ from fastapi.responses import (
 
 from oryups.config import STATIC_DIR, get_config, get_storage
 from oryups.response import make_response
-from oryups.routers.admin import is_admin_authorized
+from oryups.routers.admin import authorize_admin_optional
 from oryups.services import cache
 from oryups.utils.upload import buffer_request_body
 from oryups.utils.validation import (
@@ -193,7 +193,7 @@ async def download_direct(
     A valid admin bearer in ``Authorization: Bearer <token>`` lets
     operators download a file even after its retention window has passed.
     """
-    bypass = is_admin_authorized(authorization)
+    bypass = authorize_admin_optional(authorization)
     return await _download_response(fileid, filename, bypass_expiry=bypass)
 
 
@@ -233,97 +233,6 @@ async def upload(filename: str, request: Request) -> PlainTextResponse:
     return response
 
 
-@router.delete(
-    "/{fileid}/{filename}",
-    responses={
-        200: {
-            "description": "File removed",
-            "content": {
-                "application/json": {
-                    "examples": {
-                        "success": {
-                            "summary": "Deleted",
-                            "value": {
-                                "status": 200,
-                                "message": "Deleted",
-                                "data": None,
-                            },
-                        },
-                    },
-                },
-            },
-        },
-        403: {
-            "description": "Owner key missing or incorrect",
-            "content": {
-                "application/json": {
-                    "examples": {
-                        "forbidden": {
-                            "summary": "Missing or wrong X-Owner-Key",
-                            "value": {
-                                "status": 403,
-                                "message": "Forbidden",
-                                "data": None,
-                            },
-                        },
-                    },
-                },
-            },
-        },
-        404: {
-            "description": "File not found",
-            "content": {
-                "application/json": {
-                    "examples": {
-                        "not_found": {
-                            "summary": "Missing fileid or filename",
-                            "value": {
-                                "status": 404,
-                                "message": "Not Found!",
-                                "data": None,
-                            },
-                        },
-                    },
-                },
-            },
-        },
-    },
-)
-async def delete_file(
-    fileid: str,
-    filename: str,
-    x_owner_key: str = Header(default=""),
-) -> JSONResponse:
-    """Permanently remove a file when the caller proves ownership.
-
-    Requires the ``X-Owner-Key`` header to match the key issued at upload
-    time. Unlike the retention reaper, user-initiated deletion always
-    removes the file immediately regardless of ``delete.permanently``.
-    """
-    config = get_config()
-    validate_fileid(fileid, config["folderidlength"])
-    validate_filename_for_read(filename)
-
-    storage = get_storage()
-    try:
-        metadata = await run_in_threadpool(storage.load_metadata, fileid, filename)
-    except FileNotFoundError:
-        raise HTTPException(status_code=404, detail="Not Found!")
-
-    expected = getattr(metadata, "delete", "") or ""
-    if not expected or not secrets.compare_digest(x_owner_key, expected):
-        raise HTTPException(status_code=403, detail="Forbidden")
-
-    removed = await run_in_threadpool(
-        storage.remove, fileid, filename, expected, False, True
-    )
-    if not removed:
-        raise HTTPException(status_code=404, detail="Not Found!")
-
-    cache.invalidate(fileid)
-    return make_response(200, "Deleted")
-
-
 @router.get("/{fileid}/{filename}")
 async def share_page(
     fileid: str,
@@ -339,7 +248,7 @@ async def share_page(
     metadata with the same token.
     """
     config = get_config()
-    bypass = is_admin_authorized(authorization)
+    bypass = authorize_admin_optional(authorization)
 
     if _is_curl_ua(request):
         return await _download_response(fileid, filename, bypass_expiry=bypass)

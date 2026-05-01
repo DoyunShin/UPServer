@@ -76,6 +76,37 @@ def is_admin_authorized(authorization: str) -> bool:
     return admin_session.validate_token(token)
 
 
+def authorize_admin_optional(authorization: str) -> bool:
+    """Distinguish a missing bearer from a present-but-invalid bearer.
+
+    Public read endpoints invoke this so they can treat unauthenticated
+    callers as anonymous (returning normal 404s for expired files) while
+    still surfacing 401 to a client that *did* present credentials. That
+    lets the admin SPA detect a stale local session and prompt re-login,
+    rather than misrendering the file as missing.
+
+    Args:
+        authorization(str): The raw ``Authorization`` header value.
+
+    Return:
+        admin(bool): True when a valid admin bearer is present, False
+        when the header is absent.
+
+    Raises:
+        HTTPException(401): When the header is present but does not
+        match a live bearer token.
+    """
+    if not authorization:
+        return False
+    if is_admin_authorized(authorization):
+        return True
+    raise HTTPException(
+        status_code=401,
+        detail="Unauthorized",
+        headers=_NO_STORE_HEADERS,
+    )
+
+
 def _ensure_admin_enabled() -> None:
     """Raise 404 when ``host.admin_token`` is not configured."""
     admin_token = get_config()["host"].get("admin_token", "")
