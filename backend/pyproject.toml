@@ -1,6 +1,6 @@
 [project]
 name = "ory-upserver"
-version = "1.0.3"
+version = "1.1.0"
 description = "Simple UPload Server"
 readme = "README.md"
 license = "Apache-2.0"
