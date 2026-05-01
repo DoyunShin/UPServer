@@ -30,6 +30,23 @@ export interface UploadResult {
   ownerKey: string | null;
 }
 
+export interface AdminFileItem {
+  id: string;
+  name: string;
+  mimeType: string;
+  size: number;
+  hidden: boolean;
+  created_at: number;
+  delete_after: number;
+  expires_at: number | null;
+  expired: boolean;
+}
+
+export interface AdminFilesData {
+  active: AdminFileItem[];
+  expired: AdminFileItem[];
+}
+
 export class APIError extends Error {
   status: number;
   constructor(status: number, message: string) {
@@ -59,13 +76,38 @@ export async function fetchInfo(fetcher: typeof fetch = fetch): Promise<InfoData
   return parseEnvelope<InfoData>(res);
 }
 
+export interface FetchMetaOptions {
+  bearerToken?: string;
+}
+
 export async function fetchMeta(
   fileid: string,
   filename: string,
-  fetcher: typeof fetch = fetch
+  fetcher: typeof fetch = fetch,
+  options: FetchMetaOptions = {}
 ): Promise<FileMetadata> {
-  const res = await fetcher(`/api/v1/${encodeURIComponent(fileid)}/${encodeURIComponent(filename)}`);
+  const headers: Record<string, string> = {};
+  if (options.bearerToken) headers['Authorization'] = `Bearer ${options.bearerToken}`;
+  const res = await fetcher(
+    `/api/v1/${encodeURIComponent(fileid)}/${encodeURIComponent(filename)}`,
+    { headers }
+  );
   return parseEnvelope<FileMetadata>(res);
+}
+
+export async function fetchAdminFile(
+  fileid: string,
+  filename: string,
+  token: string
+): Promise<Blob> {
+  const res = await fetch(
+    `/get/${encodeURIComponent(fileid)}/${encodeURIComponent(filename)}`,
+    { headers: { Authorization: `Bearer ${token}` } }
+  );
+  if (!res.ok) {
+    throw new APIError(res.status, res.statusText || `Download failed (${res.status})`);
+  }
+  return res.blob();
 }
 
 export async function deleteFile(
@@ -87,6 +129,44 @@ export async function deleteFile(
   if (!res.ok || (body && body.status !== 200)) {
     throw new APIError(body?.status ?? res.status, body?.message ?? res.statusText);
   }
+}
+
+export async function fetchAdminFiles(
+  token: string,
+  fetcher: typeof fetch = fetch
+): Promise<AdminFilesData> {
+  const res = await fetcher('/api/v1/admin/files', {
+    headers: { Authorization: `Bearer ${token}` }
+  });
+  return parseEnvelope<AdminFilesData>(res);
+}
+
+export interface AdminLoginResult {
+  token: string;
+  expires_at: number;
+  ttl_seconds: number;
+}
+
+export async function adminLogin(
+  password: string,
+  fetcher: typeof fetch = fetch
+): Promise<AdminLoginResult> {
+  const res = await fetcher('/api/v1/admin/login', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ password })
+  });
+  return parseEnvelope<AdminLoginResult>(res);
+}
+
+export async function adminLogout(
+  token: string,
+  fetcher: typeof fetch = fetch
+): Promise<void> {
+  await fetcher('/api/v1/admin/logout', {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${token}` }
+  });
 }
 
 export interface UploadHandle {

@@ -113,7 +113,12 @@ def invalidate(fileid: str) -> None:
         _tombstones[fileid] = deadline
 
 
-def load_metadata(fileid: str, filename: str) -> Metadata:
+def load_metadata(
+    fileid: str,
+    filename: str,
+    *,
+    bypass_expiry: bool = False,
+) -> Metadata:
     """Load metadata for (fileid, filename), using cache when possible.
 
     Enforces retention: if ``config["delete"]`` marks the file as expired,
@@ -123,6 +128,10 @@ def load_metadata(fileid: str, filename: str) -> Metadata:
     Args:
         fileid(str): File id
         filename(str): Filename
+        bypass_expiry(bool, optional): When True, return metadata even if
+            the retention window has passed. Used by admin-authorized
+            callers so operators can still inspect or download files that
+            return 404 to the public.
 
     Return:
         metadata(Metadata): Metadata object.
@@ -133,7 +142,7 @@ def load_metadata(fileid: str, filename: str) -> Metadata:
         store_cache(metadata)
         metadata = get_cache(fileid, filename) or _redacted_copy(metadata)
 
-    if is_expired(metadata, get_config().get("delete", {})):
+    if not bypass_expiry and is_expired(metadata, get_config().get("delete", {})):
         with _cache_lock:
             _cache.pop(fileid, None)
         raise FileNotFoundError(f"{fileid}/{filename} expired")

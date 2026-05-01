@@ -1,0 +1,169 @@
+<!doctype html>
+<html lang="en" class="dark">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="robots" content="noindex" />
+    <title>StatusCode</title>
+    <link rel="icon" type="image/svg+xml" href="/assets/img/favicon.svg" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      rel="stylesheet"
+      href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&family=Geist+Mono:wght@500;600&display=swap"
+    />
+    <script>
+      (function () {
+        try {
+          var t = localStorage.getItem('theme') || 'dark';
+          document.documentElement.classList.toggle('dark', t === 'dark');
+        } catch (e) {}
+      })();
+    </script>
+    <style>
+      :root {
+        --background: oklch(1 0 0);
+        --foreground: oklch(0.145 0 0);
+        --card: oklch(1 0 0);
+        --muted-foreground: oklch(0.556 0 0);
+        --primary: oklch(0.205 0 0);
+        --primary-foreground: oklch(0.985 0 0);
+        --border: oklch(0.922 0 0);
+        --ring: oklch(0.708 0 0);
+        --radius: 0.75rem;
+      }
+      .dark {
+        --background: oklch(0.145 0 0);
+        --foreground: oklch(0.985 0 0);
+        --card: oklch(0.205 0 0);
+        --muted-foreground: oklch(0.708 0 0);
+        --primary: oklch(0.985 0 0);
+        --primary-foreground: oklch(0.205 0 0);
+        --border: oklch(1 0 0 / 10%);
+        --ring: oklch(0.556 0 0);
+      }
+      * {
+        box-sizing: border-box;
+      }
+      html,
+      body {
+        margin: 0;
+        padding: 0;
+      }
+      body {
+        font-family: 'Geist', -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
+        background: var(--background);
+        color: var(--foreground);
+        min-height: 100vh;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        padding: 24px;
+        -webkit-font-smoothing: antialiased;
+      }
+      .card {
+        width: 100%;
+        max-width: 480px;
+        background: var(--card);
+        border: 1px solid var(--border);
+        border-radius: var(--radius);
+        padding: 40px 32px;
+        display: flex;
+        flex-direction: column;
+        align-items: flex-start;
+        gap: 20px;
+        box-shadow: 0 1px 0 0 rgba(0, 0, 0, 0.04);
+      }
+      .status {
+        font-family: 'Geist Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
+        font-size: 56px;
+        font-weight: 600;
+        letter-spacing: -0.02em;
+        line-height: 1;
+        margin: 0;
+      }
+      .badge {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        font-family: 'Geist Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
+        font-size: 11px;
+        font-weight: 500;
+        letter-spacing: 0.04em;
+        text-transform: uppercase;
+        color: var(--muted-foreground);
+        border: 1px solid var(--border);
+        border-radius: 999px;
+        padding: 4px 10px;
+      }
+      .badge::before {
+        content: '';
+        width: 6px;
+        height: 6px;
+        border-radius: 999px;
+        background: var(--muted-foreground);
+      }
+      .message {
+        margin: 0;
+        font-size: 16px;
+        color: var(--foreground);
+      }
+      .hint {
+        margin: 0;
+        font-size: 14px;
+        color: var(--muted-foreground);
+        line-height: 1.5;
+      }
+      .actions {
+        display: flex;
+        gap: 8px;
+        margin-top: 4px;
+      }
+      .btn {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        height: 36px;
+        padding: 0 14px;
+        border-radius: 8px;
+        font-size: 14px;
+        font-weight: 500;
+        text-decoration: none;
+        cursor: pointer;
+        transition: background 120ms ease, color 120ms ease, border-color 120ms ease;
+      }
+      .btn-primary {
+        background: var(--primary);
+        color: var(--primary-foreground);
+        border: 1px solid var(--primary);
+      }
+      .btn-primary:hover {
+        background: color-mix(in oklch, var(--primary) 90%, transparent);
+      }
+      .btn-ghost {
+        background: transparent;
+        color: var(--foreground);
+        border: 1px solid var(--border);
+      }
+      .btn-ghost:hover {
+        background: color-mix(in oklch, var(--foreground) 6%, transparent);
+      }
+      .btn:focus-visible {
+        outline: none;
+        box-shadow: 0 0 0 2px var(--background), 0 0 0 4px var(--ring);
+      }
+    </style>
+  </head>
+  <body>
+    <main class="card" role="alert">
+      <span class="badge">Error</span>
+      <h1 class="status">StatusCode</h1>
+      <p class="message">StatusMessage</p>
+      <p class="hint">StatusHint</p>
+      <div class="actions">
+        <a class="btn btn-primary" href="/">Go home</a>
+        <button class="btn btn-ghost" type="button" onclick="history.back()">Go back</button>
+      </div>
+    </main>
+  </body>
+</html>

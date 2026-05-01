@@ -7,11 +7,12 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse, Response
+from starlette.exceptions import HTTPException as StarletteHTTPException
 from starlette.middleware.base import BaseHTTPMiddleware
 
 from oryups.config import STATIC_DIR, get_config, load_config
 from oryups.response import make_response
-from oryups.routers import api, api_v1, assets, files, root
+from oryups.routers import admin, api, api_v1, assets, files, root
 from oryups.services.reaper import run_reaper
 
 
@@ -152,6 +153,7 @@ if _module_cfg is not None:
     _configure_middleware(app, _module_cfg)
 
 app.include_router(api.router)
+app.include_router(admin.router)
 app.include_router(api_v1.router)
 app.include_router(assets.router)
 app.include_router(root.router)
@@ -168,41 +170,144 @@ def _is_curl_ua(request: Request) -> bool:
     return "curl" in request.headers.get("user-agent", "")
 
 
-def _render_error(status_code: int, message: str) -> HTMLResponse:
+_DEFAULT_HINT_BY_STATUS: dict[int, str] = {
+    500: "An unexpected error occurred on the server. Please try again later.",
+}
+
+_GENERIC_HINT: str = "The resource you were looking for could not be reached."
+
+
+def _render_error(status_code: int, message: str, hint: str) -> HTMLResponse:
     """Render the static HTML error page with the given status code and message.
 
     If the ``error.html`` template cannot be read (missing file, permission
     denied, etc.) we emit a minimal inline page so the exception handler never
-    re-enters itself. Both substitutions are HTML-escaped as defense in depth.
+    re-enters itself. All three substitutions are HTML-escaped as defense in
+    depth.
     """
     safe_message = html.escape(message)
     safe_code = html.escape(str(status_code))
+    safe_hint = html.escape(hint)
     try:
         template = STATIC_DIR.joinpath("error.html").read_text()
-        body = template.replace("StatusCode", safe_code).replace("StatusMessage", safe_message)
+        body = (
+            template
+            .replace("StatusCode", safe_code)
+            .replace("StatusMessage", safe_message)
+            .replace("StatusHint", safe_hint)
+        )
         return HTMLResponse(body, status_code=status_code)
     except OSError:
         fallback = (
             f"<!doctype html><meta charset=\"utf-8\">"
             f"<title>{safe_code}</title>"
-            f"<h1>{safe_code}</h1><p>{safe_message}</p>"
+            f"<h1>{safe_code}</h1><p>{safe_message}</p><p>{safe_hint}</p>"
         )
         return HTMLResponse(fallback, status_code=status_code)
 
 
-def _build_error_response(request: Request, status_code: int, message: str) -> Response:
-    """Pick the right error representation (plain text / envelope / HTML) for a request."""
+def _looks_like_file_share_path(path: str) -> bool:
+    """Return True when ``path`` matches the ``/<fileid>/<filename>`` shape.
+
+    Used to distinguish a "file not found / expired" 404 from a "page does
+    not exist" 404. We require exactly two non-empty segments and reject
+    any path that begins with a reserved app prefix (``/api/``, ``/admin``,
+    ``/assets/``, ``/get/``).
+    """
+    if not path or not path.startswith("/"):
+        return False
+    if (
+        path.startswith("/api/")
+        or path.startswith("/admin")
+        or path.startswith("/assets/")
+        or path.startswith("/get/")
+    ):
+        return False
+    parts = [p for p in path.strip("/").split("/") if p]
+    return len(parts) == 2
+
+
+def _categorize_html_error(
+    path: str, status_code: int, message: str
+) -> tuple[str, str]:
+    """Pick the user-facing message and hint for an HTML error page.
+
+    The two flavors of 404 are split here so the rendered page can
+    explain whether a *page* or a *file* could not be found.
+
+    Args:
+        path(str): The request path that produced the error.
+        status_code(int): HTTP status code being rendered.
+        message(str): Original ``HTTPException.detail`` (used as a fallback
+            when no category-specific copy exists).
+
+    Return:
+        message_and_hint(tuple[str, str]): The message line and hint line
+        to inject into the template.
+    """
+    if status_code == 404:
+        if _looks_like_file_share_path(path):
+            return (
+                "File not found",
+                "This file may have been removed, expired, or never existed.",
+            )
+        return (
+            "Page not found",
+            "The page you were looking for does not exist on this server.",
+        )
+    hint = _DEFAULT_HINT_BY_STATUS.get(status_code, _GENERIC_HINT)
+    return message, hint
+
+
+def _build_error_response(
+    request: Request,
+    status_code: int,
+    message: str,
+    extra_headers: Optional[dict[str, str]] = None,
+) -> Response:
+    """Pick the right error representation (plain text / envelope / HTML) for a request.
+
+    Optional ``extra_headers`` are merged into the outgoing response, so
+    handlers that raise ``HTTPException(..., headers=...)`` (e.g. the
+    admin endpoint emitting ``Cache-Control: no-store``) keep their
+    headers across this central rewrite.
+    """
     if _is_curl_ua(request):
-        return PlainTextResponse(f"{status_code}: {message}", status_code=status_code)
-    if _is_api_path(request.url.path) or request.method == "DELETE":
-        return make_response(status_code, message)
-    return _render_error(status_code, message)
+        response: Response = PlainTextResponse(f"{status_code}: {message}", status_code=status_code)
+    elif _is_api_path(request.url.path) or request.method == "DELETE":
+        response = make_response(status_code, message)
+    else:
+        # A browser GET that hits a route only registered for other methods
+        # surfaces as 405; from the user's perspective the URL just does
+        # not have a page, so render it as a "page not found" 404.
+        html_status = status_code
+        if html_status == 405 and request.method == "GET":
+            html_status = 404
+        rendered_message, hint = _categorize_html_error(
+            request.url.path, html_status, message
+        )
+        response = _render_error(html_status, rendered_message, hint)
+    if extra_headers:
+        for header, value in extra_headers.items():
+            response.headers[header] = value
+    return response
 
 
-@app.exception_handler(HTTPException)
-async def on_http_exception(request: Request, exc: HTTPException) -> Response:
-    """Uniform HTTPException handler aware of API / curl / browser clients."""
-    return _build_error_response(request, exc.status_code, str(exc.detail))
+@app.exception_handler(StarletteHTTPException)
+async def on_http_exception(request: Request, exc: StarletteHTTPException) -> Response:
+    """Uniform HTTPException handler aware of API / curl / browser clients.
+
+    Registered on Starlette's base ``HTTPException`` so it also catches
+    routing-layer errors (e.g. 404 for unknown paths and 405 when only
+    other methods are registered) which are raised before any route's
+    own ``fastapi.HTTPException`` ever runs.
+    """
+    return _build_error_response(
+        request,
+        exc.status_code,
+        str(exc.detail),
+        getattr(exc, "headers", None),
+    )
 
 
 @app.exception_handler(RequestValidationError)

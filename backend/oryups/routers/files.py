@@ -16,6 +16,7 @@ from fastapi.responses import (
 
 from oryups.config import STATIC_DIR, get_config, get_storage
 from oryups.response import make_response
+from oryups.routers.admin import is_admin_authorized
 from oryups.services import cache
 from oryups.utils.upload import buffer_request_body
 from oryups.utils.validation import (
@@ -117,12 +118,19 @@ async def _stream_gdrive(storage, gfile_id: str) -> AsyncIterator[bytes]:
             yield data
 
 
-async def _load_metadata(fileid: str, filename: str):
+async def _load_metadata(fileid: str, filename: str, *, bypass_expiry: bool = False):
     """Load metadata off the event loop (storage backends may do network I/O)."""
-    return await run_in_threadpool(cache.load_metadata, fileid, filename)
+    return await run_in_threadpool(
+        lambda: cache.load_metadata(fileid, filename, bypass_expiry=bypass_expiry)
+    )
 
 
-async def _download_response(fileid: str, filename: str) -> Response:
+async def _download_response(
+    fileid: str,
+    filename: str,
+    *,
+    bypass_expiry: bool = False,
+) -> Response:
     """Build the file download response using the configured storage backend."""
     config = get_config()
     validate_fileid(fileid, config["folderidlength"])
@@ -133,7 +141,7 @@ async def _download_response(fileid: str, filename: str) -> Response:
     try:
         if storage.cache and storage.is_cached(fileid, filename):
             cached_path = storage.get_cached(fileid, filename)
-            metadata = await _load_metadata(fileid, filename)
+            metadata = await _load_metadata(fileid, filename, bypass_expiry=bypass_expiry)
             safe_mime = _safe_download_mime(metadata.mimeType)
             return FileResponse(
                 cached_path,
@@ -146,7 +154,7 @@ async def _download_response(fileid: str, filename: str) -> Response:
             cdn_url = config["host"]["cdn"]["url"].rstrip("/")
             return RedirectResponse(f"{cdn_url}/{fileid}/{filename}")
 
-        metadata = await _load_metadata(fileid, filename)
+        metadata = await _load_metadata(fileid, filename, bypass_expiry=bypass_expiry)
         storage_name = config["storage"]
         safe_mime = _safe_download_mime(metadata.mimeType)
 
@@ -175,9 +183,18 @@ async def _download_response(fileid: str, filename: str) -> Response:
 
 
 @router.get("/get/{fileid}/{filename}")
-async def download_direct(fileid: str, filename: str) -> Response:
-    """Direct file download endpoint."""
-    return await _download_response(fileid, filename)
+async def download_direct(
+    fileid: str,
+    filename: str,
+    authorization: str = Header(default=""),
+) -> Response:
+    """Direct file download endpoint.
+
+    A valid admin bearer in ``Authorization: Bearer <token>`` lets
+    operators download a file even after its retention window has passed.
+    """
+    bypass = is_admin_authorized(authorization)
+    return await _download_response(fileid, filename, bypass_expiry=bypass)
 
 
 @router.put("/{filename:path}")
@@ -308,18 +325,30 @@ async def delete_file(
 
 
 @router.get("/{fileid}/{filename}")
-async def share_page(fileid: str, filename: str, request: Request) -> Response:
-    """Serve the SPA page for browser clients, or stream the file for curl clients."""
+async def share_page(
+    fileid: str,
+    filename: str,
+    request: Request,
+    authorization: str = Header(default=""),
+) -> Response:
+    """Serve the SPA page for browser clients, or stream the file for curl clients.
+
+    A valid admin bearer in ``Authorization: Bearer <token>`` bypasses
+    the retention check on both branches so operators can curl an
+    expired file or the SPA can render its share page after fetching
+    metadata with the same token.
+    """
     config = get_config()
+    bypass = is_admin_authorized(authorization)
 
     if _is_curl_ua(request):
-        return await _download_response(fileid, filename)
+        return await _download_response(fileid, filename, bypass_expiry=bypass)
 
     validate_fileid(fileid, config["folderidlength"])
     validate_filename_for_read(filename)
 
     try:
-        await _load_metadata(fileid, filename)
+        await _load_metadata(fileid, filename, bypass_expiry=bypass)
     except FileNotFoundError:
         raise HTTPException(status_code=404, detail="Not Found!")
 

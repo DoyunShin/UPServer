@@ -42,6 +42,20 @@ async def index() -> FileResponse:
     return FileResponse(STATIC_DIR / "index.html", media_type="text/html")
 
 
+@router.get("/admin", include_in_schema=False)
+@router.get("/admin/{path:path}", include_in_schema=False)
+async def get_admin_page(path: str = "") -> FileResponse:
+    """Serve the SPA so any SvelteKit ``/admin/...`` route can take over.
+
+    The single-segment path ``/admin`` does not match
+    ``/{fileid}/{filename}`` in :mod:`oryups.routers.files`, and a
+    three-segment admin file path like ``/admin/<id>/<name>`` does not
+    match anything else either. We therefore route the entire ``/admin``
+    subtree to the SPA shell.
+    """
+    return FileResponse(STATIC_DIR / "index.html", media_type="text/html")
+
+
 @router.get("/favicon.ico", include_in_schema=False)
 async def favicon() -> Response:
     """Serve the favicon, validating any operator-configured override.

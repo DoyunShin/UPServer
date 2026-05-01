@@ -6,6 +6,7 @@ from fastapi.responses import JSONResponse
 
 from oryups.config import get_config
 from oryups.response import make_response
+from oryups.routers.admin import is_admin_authorized
 from oryups.services import cache
 from oryups.utils.validation import validate_fileid, validate_filename_for_read
 
@@ -132,13 +133,25 @@ async def clearcache(
         },
     },
 )
-async def get_metadata(fileid: str, filename: str) -> JSONResponse:
-    """Return metadata for a stored file by (fileid, filename)."""
+async def get_metadata(
+    fileid: str,
+    filename: str,
+    authorization: str = Header(default=""),
+) -> JSONResponse:
+    """Return metadata for a stored file by (fileid, filename).
+
+    A valid admin bearer in ``Authorization: Bearer <token>`` bypasses
+    the retention check, so operators can still inspect files that have
+    already expired and now return 404 to the public.
+    """
     folder_length = get_config()["folderidlength"]
     validate_fileid(fileid, folder_length)
     validate_filename_for_read(filename)
+    bypass_expiry = is_admin_authorized(authorization)
     try:
-        metadata = await run_in_threadpool(cache.load_metadata, fileid, filename)
+        metadata = await run_in_threadpool(
+            lambda: cache.load_metadata(fileid, filename, bypass_expiry=bypass_expiry)
+        )
     except FileNotFoundError:
         raise HTTPException(status_code=404, detail="Not Found!")
     return make_response(200, "OK", metadata.to_dict())
