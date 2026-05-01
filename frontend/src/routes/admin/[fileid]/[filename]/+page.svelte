@@ -1,29 +1,66 @@
 <script lang="ts">
-  import { onMount } from 'svelte';
+  import { onDestroy, onMount } from 'svelte';
+  import { goto } from '$app/navigation';
   import { page } from '$app/stores';
+  import Preview from '$lib/components/Preview.svelte';
+  import { ICONS, kindFromName } from '$lib/utils/kind';
+  import {
+    formatBytes,
+    formatTimestamp,
+    formatRelativeFromSeconds,
+    formatRelativeWords,
+    computeExpiry
+  } from '$lib/utils/format';
   import {
     APIError,
+    adminDeleteFile,
     fetchAdminFile,
     fetchMeta,
     type FileMetadata
   } from '$lib/api';
   import { readAdminSession, clearAdminSession } from '$lib/stores/admin-session';
-  import {
-    formatBytes,
-    formatTimestamp,
-    formatRelativeWords,
-    computeExpiry
-  } from '$lib/utils/format';
 
   type Status = 'idle' | 'loading' | 'ready' | 'unauthenticated' | 'notfound' | 'error';
 
   let status: Status = 'idle';
   let errorMessage = '';
+  let toastMessage = '';
   let meta: FileMetadata | null = null;
+
+  let host = '';
+  let cliCopied = false;
+  let confirmingDelete = false;
+  let deleting = false;
   let downloading = false;
+  let lastLoadKey: string | null = null;
+
+  let previewUrl = '';
+  let previewLoading = false;
+  let previewSkippedReason: 'too-large' | 'load-failed' | '' = '';
+
+  // Cap blob-backed previews so a single oversized expired file cannot
+  // exhaust the tab's memory just from rendering its preview.
+  const PREVIEW_SIZE_CAP = 50 * 1024 * 1024;
 
   $: fileid = $page.params.fileid ?? '';
   $: filename = $page.params.filename ?? '';
+  $: kind = meta ? kindFromName(meta.name, meta.mimeType) : 'file';
+
+  $: if (fileid && filename) {
+    const key = `${fileid}/${filename}`;
+    if (key !== lastLoadKey) {
+      lastLoadKey = key;
+      meta = null;
+      confirmingDelete = false;
+      load();
+    }
+  }
+
+  $: encodedPath = `${encodeURIComponent(fileid)}/${encodeURIComponent(filename)}`;
+  $: publicDownloadUrl = `/get/${encodedPath}`;
+  $: curlCommand = host
+    ? `curl -O -H "Authorization: Bearer <admin-token>" ${host}/get/${encodedPath}`
+    : `curl -O -H "Authorization: Bearer <admin-token>" /get/${encodedPath}`;
 
   $: expiry = meta
     ? computeExpiry(meta.created_at, meta.delete_after)
@@ -33,7 +70,60 @@
     ? 'Never'
     : expiry.expired
       ? 'Expired'
-      : `in ${formatRelativeWords(expiry.remainingSeconds)}`;
+      : `in ${formatRelativeFromSeconds(expiry.remainingSeconds)}`;
+
+  $: expiryWords = !expiry.enabled
+    ? 'Never expires'
+    : expiry.expired
+      ? 'Link expired'
+      : `Link expires in ${formatRelativeWords(expiry.remainingSeconds)}`;
+
+  function revokePreviewUrl(): void {
+    if (previewUrl && previewUrl.startsWith('blob:')) {
+      URL.revokeObjectURL(previewUrl);
+    }
+    previewUrl = '';
+  }
+
+  async function setupPreview(): Promise<void> {
+    revokePreviewUrl();
+    previewSkippedReason = '';
+    if (!meta) return;
+    const exp = computeExpiry(meta.created_at, meta.delete_after);
+    if (!exp.expired) {
+      previewUrl = publicDownloadUrl;
+      return;
+    }
+    if (meta.size > PREVIEW_SIZE_CAP) {
+      previewSkippedReason = 'too-large';
+      return;
+    }
+    const session = readAdminSession();
+    if (!session) {
+      previewSkippedReason = 'load-failed';
+      return;
+    }
+    const requestedKey = `${fileid}/${filename}`;
+    previewLoading = true;
+    try {
+      const blob = await fetchAdminFile(fileid, filename, session.token);
+      // Drop the result if the user navigated to a different file while
+      // the blob was downloading — otherwise we'd attach a preview from
+      // the previous file to the current page.
+      if (lastLoadKey !== requestedKey) {
+        return;
+      }
+      previewUrl = URL.createObjectURL(blob);
+    } catch {
+      if (lastLoadKey === requestedKey) {
+        previewSkippedReason = 'load-failed';
+      }
+    } finally {
+      if (lastLoadKey === requestedKey) {
+        previewLoading = false;
+      }
+    }
+  }
 
   async function load(): Promise<void> {
     const session = readAdminSession();
@@ -41,12 +131,27 @@
       status = 'unauthenticated';
       return;
     }
+    const requestedKey = `${fileid}/${filename}`;
     status = 'loading';
     errorMessage = '';
+    revokePreviewUrl();
+    previewLoading = false;
+    previewSkippedReason = '';
     try {
-      meta = await fetchMeta(fileid, filename, fetch, { bearerToken: session.token });
+      const result = await fetchMeta(fileid, filename, fetch, { bearerToken: session.token });
+      // Drop the result if the user navigated to a different file while
+      // metadata was in flight — otherwise we'd render stale meta on the
+      // current route or pair it with the wrong preview URL.
+      if (lastLoadKey !== requestedKey) {
+        return;
+      }
+      meta = result;
       status = 'ready';
+      setupPreview();
     } catch (err) {
+      if (lastLoadKey !== requestedKey) {
+        return;
+      }
       if (err instanceof APIError) {
         if (err.status === 401) {
           clearAdminSession();
@@ -92,16 +197,62 @@
         status = 'unauthenticated';
         errorMessage = 'Session expired. Please sign in again.';
       } else {
-        errorMessage = err instanceof Error ? err.message : 'Download failed';
-        setTimeout(() => (errorMessage = ''), 3000);
+        toastMessage = err instanceof Error ? err.message : 'Download failed';
+        setTimeout(() => (toastMessage = ''), 3000);
       }
     } finally {
       downloading = false;
     }
   }
 
+  async function copyCli(): Promise<void> {
+    if (!curlCommand) return;
+    try {
+      await navigator.clipboard.writeText(curlCommand);
+      cliCopied = true;
+      setTimeout(() => (cliCopied = false), 1400);
+    } catch {
+      /* clipboard unavailable */
+    }
+  }
+
+  async function confirmRemove(): Promise<void> {
+    if (!meta || deleting) return;
+    const session = readAdminSession();
+    if (!session) {
+      status = 'unauthenticated';
+      return;
+    }
+    deleting = true;
+    try {
+      await adminDeleteFile(fileid, filename, session.token);
+      toastMessage = 'File removed';
+      setTimeout(() => goto('/admin'), 600);
+      return;
+    } catch (err) {
+      if (err instanceof APIError && err.status === 401) {
+        clearAdminSession();
+        status = 'unauthenticated';
+        errorMessage = 'Session expired. Please sign in again.';
+      } else if (err instanceof APIError && err.status === 404) {
+        toastMessage = 'File no longer exists';
+        setTimeout(() => goto('/admin'), 600);
+        return;
+      } else {
+        toastMessage = err instanceof Error ? err.message : 'Remove failed';
+        setTimeout(() => (toastMessage = ''), 3000);
+      }
+    }
+    deleting = false;
+    confirmingDelete = false;
+  }
+
   onMount(() => {
-    load();
+    host = `${window.location.protocol}//${window.location.host}`;
+  });
+
+  onDestroy(() => {
+    revokePreviewUrl();
   });
 </script>
 
@@ -110,108 +261,299 @@
   <meta name="robots" content="noindex" />
 </svelte:head>
 
-<section class="wrap">
-  <div class="head">
+<div class="wrap-narrow">
+  <div class="topbar">
     <a class="back" href="/admin">← Back to admin</a>
     <span class="badge">Admin</span>
   </div>
 
   {#if status === 'idle' || status === 'loading'}
-    <p class="muted">Loading…</p>
+    <div class="dl-card">
+      <div class="preview">
+        <div class="preview-empty"><div class="hint">Loading…</div></div>
+      </div>
+    </div>
   {:else if status === 'unauthenticated'}
-    <div class="card">
-      <p class="error" role="alert">{errorMessage || 'Sign in required.'}</p>
-      <a class="btn btn-primary" href="/admin">Go to admin sign-in</a>
+    <div class="dl-card">
+      <div class="preview">
+        <div class="preview-empty">
+          <div class="big-icon">
+            <svg
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="1.5"
+              stroke-linecap="round"
+              stroke-linejoin="round">{@html ICONS.file}</svg
+            >
+          </div>
+          <div class="hint">{errorMessage || 'Sign in required.'}</div>
+          <a class="btn-primary" href="/admin">Go to admin sign-in</a>
+        </div>
+      </div>
     </div>
   {:else if status === 'notfound'}
-    <div class="card">
-      <h2>File not found</h2>
-      <p class="muted">No file with id <code>{fileid}</code> and name <code>{filename}</code>.</p>
-      <a class="btn btn-ghost" href="/admin">Back</a>
+    <div class="dl-card">
+      <div class="preview">
+        <div class="preview-empty">
+          <div class="big-icon">
+            <svg
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="1.5"
+              stroke-linecap="round"
+              stroke-linejoin="round">{@html ICONS.file}</svg
+            >
+          </div>
+          <span class="ext-badge">404</span>
+          <div class="hint">No file with id {fileid} and name {filename}.</div>
+          <a class="btn-secondary" href="/admin">Back to admin</a>
+        </div>
+      </div>
     </div>
   {:else if status === 'error'}
-    <div class="card">
-      <p class="error" role="alert">{errorMessage}</p>
-      <button type="button" class="btn btn-ghost" on:click={load}>Retry</button>
+    <div class="dl-card">
+      <div class="preview">
+        <div class="preview-empty">
+          <div class="hint error">{errorMessage}</div>
+          <button class="btn-secondary" type="button" on:click={load}>Retry</button>
+        </div>
+      </div>
     </div>
   {:else if meta}
-    <div class="card">
-      <div class="filehead">
-        <h1 class="filename">{meta.name}</h1>
-        <div class="meta-row">
-          <span>{formatBytes(meta.size)}</span>
-          <span class="sep">·</span>
-          <span class="mono">{meta.mimeType || 'unknown'}</span>
-          {#if expiry.expired}
+    <div class="dl-card">
+      <div class="file-head">
+        <div class="file-icon-sm">
+          <svg
+            width="20"
+            height="20"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="1.75"
+            stroke-linecap="round"
+            stroke-linejoin="round">{@html ICONS[kind]}</svg
+          >
+        </div>
+        <div class="file-head-text">
+          <h1 class="file-name">{meta.name}</h1>
+          <div class="file-meta">
+            <span>{formatBytes(meta.size)}</span>
             <span class="sep">·</span>
-            <span class="pill expired">expired</span>
+            <span>{meta.mimeType || 'unknown'}</span>
+            {#if expiry.expired}
+              <span class="sep">·</span>
+              <span class="pill-expired">expired</span>
+            {/if}
+          </div>
+        </div>
+        <div class="head-actions">
+          {#if confirmingDelete}
+            <button class="btn-danger" type="button" disabled={deleting} on:click={confirmRemove}>
+              {deleting ? 'Removing…' : 'Confirm remove'}
+            </button>
+            <button
+              class="btn-secondary"
+              type="button"
+              disabled={deleting}
+              on:click={() => (confirmingDelete = false)}
+            >
+              Cancel
+            </button>
+          {:else}
+            <button
+              class="btn-secondary"
+              type="button"
+              on:click={() => (confirmingDelete = true)}
+              aria-label="Remove file"
+            >
+              <svg
+                width="14"
+                height="14"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="2"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+                ><polyline points="3 6 5 6 21 6" /><path
+                  d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"
+                /><path d="M10 11v6" /><path d="M14 11v6" /><path
+                  d="M9 6V4a2 2 0 0 1 2-2h2a2 2 0 0 1 2 2v2"
+                /></svg
+              >
+              Remove
+            </button>
           {/if}
+          <button
+            class="btn-primary"
+            type="button"
+            on:click={downloadFile}
+            disabled={downloading}
+            aria-label="Download file"
+          >
+            <svg
+              width="14"
+              height="14"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="2"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+              ><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" /><polyline
+                points="7 10 12 15 17 10"
+              /><line x1="12" y1="15" x2="12" y2="3" /></svg
+            >
+            {downloading ? 'Downloading…' : 'Download'}
+          </button>
         </div>
       </div>
 
-      <dl class="grid">
-        <dt>ID</dt>
-        <dd class="mono">{fileid}</dd>
+      {#if previewLoading}
+        <div class="preview">
+          <div class="preview-empty"><div class="hint">Loading preview…</div></div>
+        </div>
+      {:else if previewSkippedReason === 'too-large'}
+        <div class="preview">
+          <div class="preview-empty">
+            <div class="big-icon">
+              <svg
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="1.5"
+                stroke-linecap="round"
+                stroke-linejoin="round">{@html ICONS[kind]}</svg
+              >
+            </div>
+            <span class="ext-badge">{expiry.expired ? 'expired' : 'large'}</span>
+            <div class="hint">
+              File is larger than {formatBytes(PREVIEW_SIZE_CAP)}. Use Download above.
+            </div>
+          </div>
+        </div>
+      {:else if previewSkippedReason === 'load-failed'}
+        <div class="preview">
+          <div class="preview-empty">
+            <div class="big-icon">
+              <svg
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="1.5"
+                stroke-linecap="round"
+                stroke-linejoin="round">{@html ICONS[kind]}</svg
+              >
+            </div>
+            <span class="ext-badge">unavailable</span>
+            <div class="hint">Could not load preview. Use Download above.</div>
+          </div>
+        </div>
+      {:else if previewUrl}
+        <Preview
+          filename={meta.name}
+          mimeType={meta.mimeType}
+          downloadUrl={previewUrl}
+          size={meta.size}
+        />
+      {/if}
 
-        <dt>Uploaded</dt>
-        <dd>{formatTimestamp(meta.created_at)}</dd>
+      <div class="dl-body">
+        <div class="info-grid">
+          <div class="info-cell">
+            <div class="info-label">Uploaded</div>
+            <div class="info-value">{formatTimestamp(meta.created_at)}</div>
+          </div>
+          <div class="info-cell">
+            <div class="info-label">Expires</div>
+            <div class="info-value">{expiresLabel}</div>
+          </div>
+          <div class="info-cell">
+            <div class="info-label">Size</div>
+            <div class="info-value">{formatBytes(meta.size)}</div>
+          </div>
+          <div class="info-cell">
+            <div class="info-label">Content-Type</div>
+            <div class="info-value">{meta.mimeType || '—'}</div>
+          </div>
+          <div class="info-cell">
+            <div class="info-label">ID</div>
+            <div class="info-value">{fileid}</div>
+          </div>
+          <div class="info-cell">
+            <div class="info-label">Status</div>
+            <div class="info-value">
+              {expiry.expired ? 'Expired (still on disk)' : 'Active'}
+            </div>
+          </div>
+        </div>
 
-        <dt>Expires</dt>
-        <dd>
-          {expiresLabel}
-          {#if expiry.enabled}
-            <span class="muted small"> · {formatTimestamp(expiry.expiresAt)}</span>
-          {/if}
-        </dd>
+        <div class="cli-block">
+          <div class="cli-head">Fetch from terminal (admin)</div>
+          <div class="cli-body">
+            <span class="cmd"><span class="cli-prompt">$</span><span>{curlCommand}</span></span>
+            <button
+              class="btn-icon-sm"
+              type="button"
+              aria-label="Copy command"
+              on:click={copyCli}
+              disabled={!curlCommand}
+            >
+              {#if cliCopied}
+                <svg
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="2"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"><polyline points="20 6 9 17 4 12" /></svg
+                >
+              {:else}
+                <svg
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="2"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                  ><rect x="9" y="9" width="13" height="13" rx="2" ry="2" /><path
+                    d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"
+                  /></svg
+                >
+              {/if}
+            </button>
+          </div>
+        </div>
 
-        <dt>Size</dt>
-        <dd>{formatBytes(meta.size)}</dd>
-      </dl>
-
-      <div class="actions">
-        <button
-          type="button"
-          class="btn btn-primary"
-          on:click={downloadFile}
-          disabled={downloading}
-        >
-          {downloading ? 'Downloading…' : 'Download'}
-        </button>
-        {#if errorMessage}
-          <span class="error" role="alert">{errorMessage}</span>
-        {/if}
+        <div class="expiry"><span class="dot" class:expired={expiry.expired}></span> {expiryWords}</div>
       </div>
     </div>
   {/if}
-</section>
+</div>
+
+{#if toastMessage}
+  <div class="toast">{toastMessage}</div>
+{/if}
 
 <style>
-  .wrap {
-    max-width: 760px;
-    margin: 0 auto;
-    padding: 24px 16px 48px;
-    display: flex;
-    flex-direction: column;
-    gap: 16px;
-  }
-
-  .head {
+  .topbar {
     display: flex;
     align-items: center;
     justify-content: space-between;
     gap: 12px;
+    margin: 0 0 12px;
+    padding: 0 4px;
   }
-
   .back {
     color: var(--muted-foreground, #888);
     text-decoration: none;
-    font-size: 14px;
+    font-size: 13px;
   }
-
   .back:hover {
     color: var(--foreground);
   }
-
   .badge {
     font-family: 'Geist Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
     font-size: 11px;
@@ -224,147 +566,241 @@
     padding: 4px 10px;
   }
 
-  .card {
+  .dl-card {
     background: var(--card);
     border: 1px solid var(--border);
-    border-radius: 12px;
-    padding: 24px;
-    display: flex;
-    flex-direction: column;
-    gap: 20px;
+    border-radius: var(--radius);
+    overflow: hidden;
   }
-
-  .filehead {
+  .file-head {
+    padding: 16px 20px;
     display: flex;
-    flex-direction: column;
-    gap: 6px;
+    align-items: center;
+    gap: 14px;
+    border-bottom: 1px solid var(--border);
   }
-
-  .filename {
-    margin: 0;
-    font-size: 22px;
+  .file-icon-sm {
+    flex-shrink: 0;
+    width: 40px;
+    height: 40px;
+    border-radius: 8px;
+    background: var(--muted);
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--foreground);
+  }
+  .file-head-text {
+    min-width: 0;
+    flex: 1;
+  }
+  .file-name {
+    font-size: 15px;
     font-weight: 600;
-    word-break: break-all;
+    letter-spacing: -0.01em;
+    margin: 0 0 2px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
-
-  .meta-row {
+  .file-meta {
+    font-size: 12px;
+    color: var(--muted-foreground);
+    font-family: 'Geist Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .file-meta .sep {
+    margin: 0 6px;
+    opacity: 0.5;
+  }
+  .pill-expired {
+    color: var(--danger, #c0392b);
+    border: 1px solid var(--danger, #c0392b);
+    border-radius: 999px;
+    padding: 1px 8px;
+    text-transform: uppercase;
+    font-size: 10px;
+    letter-spacing: 0.05em;
+  }
+  .head-actions {
+    flex-shrink: 0;
     display: flex;
     align-items: center;
     gap: 8px;
-    flex-wrap: wrap;
-    color: var(--muted-foreground, #888);
-    font-size: 14px;
   }
 
-  .sep {
-    color: var(--muted-foreground, #888);
+  .preview {
+    background: var(--muted);
+    border-bottom: 1px solid var(--border);
+    position: relative;
   }
-
-  .pill {
+  .preview-empty {
+    padding: 64px 24px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 12px;
+    color: var(--muted-foreground);
+    text-align: center;
+  }
+  .preview-empty .big-icon {
+    width: 64px;
+    height: 64px;
+    border-radius: 16px;
+    background: var(--card);
+    border: 1px solid var(--border);
     display: inline-flex;
     align-items: center;
-    gap: 6px;
-    font-family: 'Geist Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
+    justify-content: center;
+    color: var(--foreground);
+  }
+  .preview-empty .big-icon :global(svg) {
+    width: 28px;
+    height: 28px;
+  }
+  .preview-empty .ext-badge {
+    font-family: 'Geist Mono', ui-monospace, monospace;
     font-size: 11px;
     text-transform: uppercase;
-    letter-spacing: 0.04em;
-    padding: 2px 8px;
+    letter-spacing: 0.08em;
+    padding: 3px 8px;
     border-radius: 999px;
+    background: var(--card);
     border: 1px solid var(--border);
+    color: var(--muted-foreground);
   }
-
-  .pill.expired {
+  .preview-empty .hint {
+    font-size: 13px;
+  }
+  .preview-empty .hint.error {
     color: var(--danger, #c0392b);
-    border-color: var(--danger, #c0392b);
   }
 
-  .grid {
+  .dl-body {
+    padding: 20px 24px 24px;
+  }
+  .info-grid {
     display: grid;
-    grid-template-columns: 120px 1fr;
-    gap: 8px 16px;
-    margin: 0;
-    font-size: 14px;
+    grid-template-columns: 1fr 1fr;
+    gap: 0;
+    margin-top: 0;
+    border: 1px solid var(--border);
+    border-radius: calc(var(--radius) - 2px);
+    overflow: hidden;
   }
-
-  .grid dt {
-    color: var(--muted-foreground, #888);
-    font-weight: 500;
+  .info-cell {
+    padding: 12px 14px;
   }
-
-  .grid dd {
-    margin: 0;
+  .info-cell:nth-child(odd) {
+    border-right: 1px solid var(--border);
+  }
+  .info-cell:nth-child(n + 3) {
+    border-top: 1px solid var(--border);
+  }
+  .info-label {
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: var(--muted-foreground);
+    margin-bottom: 4px;
+  }
+  .info-value {
+    font-size: 13px;
+    font-family: 'Geist Mono', ui-monospace, monospace;
+    color: var(--foreground);
     word-break: break-all;
   }
 
-  .small {
-    font-size: 13px;
+  .cli-block {
+    margin-top: 20px;
+    border: 1px solid var(--border);
+    border-radius: calc(var(--radius) - 2px);
+    overflow: hidden;
   }
-
-  .muted {
-    color: var(--muted-foreground, #888);
-  }
-
-  .mono,
-  code {
-    font-family: 'Geist Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
-    font-size: 13px;
-  }
-
-  code {
-    background: color-mix(in oklch, var(--card) 80%, transparent);
-    padding: 1px 4px;
-    border-radius: 4px;
-  }
-
-  .actions {
+  .cli-head {
+    padding: 8px 14px;
+    border-bottom: 1px solid var(--border);
+    background: var(--muted);
+    font-size: 12px;
+    color: var(--muted-foreground);
+    font-family: 'Geist Mono', ui-monospace, monospace;
     display: flex;
     align-items: center;
-    gap: 12px;
-    flex-wrap: wrap;
+    gap: 10px;
   }
-
-  .btn {
-    display: inline-flex;
+  .cli-body {
+    padding: 12px 14px;
+    font-family: 'Geist Mono', ui-monospace, monospace;
+    font-size: 13px;
+    line-height: 1.7;
+    display: flex;
     align-items: center;
+    gap: 10px;
+  }
+  .cli-body .cmd {
+    flex: 1;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .cli-body .cli-prompt {
+    color: var(--muted-foreground);
+    margin-right: 6px;
+    user-select: none;
+  }
+
+  .expiry {
+    margin-top: 14px;
+    font-size: 12px;
+    color: var(--muted-foreground);
+    display: flex;
+    align-items: center;
+    justify-content: center;
     gap: 6px;
-    height: 36px;
-    padding: 0 14px;
-    border-radius: 8px;
-    font-size: 14px;
-    font-weight: 500;
-    text-decoration: none;
-    cursor: pointer;
-    border: 1px solid var(--border);
+  }
+  .expiry .dot {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: oklch(0.72 0.15 90);
+    display: inline-block;
+  }
+  .expiry .dot.expired {
+    background: var(--danger, #c0392b);
+  }
+
+  .toast {
+    position: fixed;
+    bottom: 24px;
+    left: 50%;
+    transform: translateX(-50%);
     background: var(--card);
-    color: var(--foreground);
-    transition: background 120ms ease, color 120ms ease, border-color 120ms ease;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 10px 16px;
+    font-size: 13px;
+    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.2);
   }
 
-  .btn:disabled {
-    opacity: 0.6;
-    cursor: not-allowed;
-  }
-
-  .btn-primary {
-    background: var(--primary);
-    color: var(--primary-foreground);
-    border-color: var(--primary);
-  }
-
-  .btn-primary:hover:not(:disabled) {
-    background: color-mix(in oklch, var(--primary) 90%, transparent);
-  }
-
-  .btn-ghost {
-    background: transparent;
-  }
-
-  .btn-ghost:hover {
-    background: color-mix(in oklch, var(--foreground) 6%, transparent);
-  }
-
-  .error {
-    color: var(--danger, #c0392b);
-    margin: 0;
+  @media (max-width: 600px) {
+    .info-grid {
+      grid-template-columns: 1fr;
+    }
+    .info-cell:nth-child(odd) {
+      border-right: 0;
+    }
+    .info-cell + .info-cell {
+      border-top: 1px solid var(--border);
+    }
+    .file-head {
+      flex-wrap: wrap;
+    }
+    .head-actions {
+      width: 100%;
+      justify-content: flex-end;
+    }
   }
 </style>
