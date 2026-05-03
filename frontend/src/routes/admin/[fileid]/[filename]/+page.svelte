@@ -14,6 +14,7 @@
   import {
     APIError,
     adminDeleteFile,
+    adminUpdateFileExpiry,
     fetchAdminFile,
     fetchMeta,
     type FileMetadata
@@ -37,6 +38,11 @@
   let previewUrl = '';
   let previewLoading = false;
   let previewSkippedReason: 'too-large' | 'load-failed' | '' = '';
+
+  let editingExpiry = false;
+  let savingExpiry = false;
+  let expiryNeverChecked = false;
+  let expiryDateValue = '';
 
   // Cap blob-backed previews so a single oversized expired file cannot
   // exhaust the tab's memory just from rendering its preview.
@@ -245,6 +251,82 @@
     }
     deleting = false;
     confirmingDelete = false;
+  }
+
+  function pad2(n: number): string {
+    return n < 10 ? `0${n}` : String(n);
+  }
+
+  function unixToDatetimeLocal(unix: number): string {
+    const d = new Date(unix * 1000);
+    return (
+      `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}T` +
+      `${pad2(d.getHours())}:${pad2(d.getMinutes())}`
+    );
+  }
+
+  function startEditExpiry(): void {
+    if (!meta) return;
+    const exp = computeExpiry(meta.created_at, meta.delete_after);
+    expiryNeverChecked = !exp.enabled;
+    const seedUnix = exp.enabled && !exp.expired ? exp.expiresAt : Date.now() / 1000 + 7 * 86400;
+    expiryDateValue = unixToDatetimeLocal(seedUnix);
+    editingExpiry = true;
+  }
+
+  function cancelEditExpiry(): void {
+    editingExpiry = false;
+    savingExpiry = false;
+  }
+
+  async function saveExpiry(): Promise<void> {
+    if (!meta || savingExpiry) return;
+    const session = readAdminSession();
+    if (!session) {
+      status = 'unauthenticated';
+      return;
+    }
+    let deleteAfter: number;
+    if (expiryNeverChecked) {
+      deleteAfter = -1;
+    } else {
+      const picked = new Date(expiryDateValue);
+      const pickedUnix = picked.getTime() / 1000;
+      if (!Number.isFinite(pickedUnix)) {
+        toastMessage = 'Pick a valid date and time.';
+        setTimeout(() => (toastMessage = ''), 3000);
+        return;
+      }
+      deleteAfter = Math.max(0, Math.floor(pickedUnix - meta.created_at));
+    }
+    savingExpiry = true;
+    try {
+      const updated = await adminUpdateFileExpiry(
+        fileid,
+        filename,
+        deleteAfter,
+        session.token
+      );
+      meta = updated;
+      editingExpiry = false;
+      toastMessage = 'Expiry updated';
+      setTimeout(() => (toastMessage = ''), 2000);
+    } catch (err) {
+      if (err instanceof APIError && err.status === 401) {
+        clearAdminSession();
+        status = 'unauthenticated';
+        errorMessage = 'Session expired. Please sign in again.';
+      } else if (err instanceof APIError && err.status === 404) {
+        toastMessage = 'File no longer exists';
+        setTimeout(() => goto('/admin'), 600);
+        return;
+      } else {
+        toastMessage = err instanceof Error ? err.message : 'Update failed';
+        setTimeout(() => (toastMessage = ''), 3000);
+      }
+    } finally {
+      savingExpiry = false;
+    }
   }
 
   onMount(() => {
@@ -467,8 +549,52 @@
             <div class="info-value">{formatTimestamp(meta.created_at)}</div>
           </div>
           <div class="info-cell">
-            <div class="info-label">Expires</div>
-            <div class="info-value">{expiresLabel}</div>
+            <div class="info-label expires-label-row">
+              <span>Expires</span>
+              {#if !editingExpiry}
+                <button
+                  type="button"
+                  class="link-btn"
+                  on:click={startEditExpiry}
+                  aria-label="Edit expiry"
+                >
+                  Edit
+                </button>
+              {/if}
+            </div>
+            {#if editingExpiry}
+              <div class="expiry-editor">
+                <label class="never-row">
+                  <input type="checkbox" bind:checked={expiryNeverChecked} />
+                  Never expires
+                </label>
+                <input
+                  type="datetime-local"
+                  bind:value={expiryDateValue}
+                  disabled={expiryNeverChecked || savingExpiry}
+                />
+                <div class="expiry-buttons">
+                  <button
+                    type="button"
+                    class="btn-primary"
+                    on:click={saveExpiry}
+                    disabled={savingExpiry}
+                  >
+                    {savingExpiry ? 'Saving…' : 'Save'}
+                  </button>
+                  <button
+                    type="button"
+                    class="btn-secondary"
+                    on:click={cancelEditExpiry}
+                    disabled={savingExpiry}
+                  >
+                    Cancel
+                  </button>
+                </div>
+              </div>
+            {:else}
+              <div class="info-value">{expiresLabel}</div>
+            {/if}
           </div>
           <div class="info-cell">
             <div class="info-label">Size</div>
@@ -802,5 +928,61 @@
       width: 100%;
       justify-content: flex-end;
     }
+  }
+
+  .expires-label-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+  }
+
+  .link-btn {
+    background: transparent;
+    border: 0;
+    padding: 0;
+    color: var(--muted-foreground);
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    cursor: pointer;
+    text-decoration: underline;
+  }
+
+  .link-btn:hover {
+    color: var(--foreground);
+  }
+
+  .expiry-editor {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    margin-top: 6px;
+  }
+
+  .expiry-editor input[type='datetime-local'] {
+    font: inherit;
+    padding: 4px 6px;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    background: var(--background, transparent);
+    color: var(--foreground);
+  }
+
+  .expiry-editor input[type='datetime-local']:disabled {
+    opacity: 0.5;
+  }
+
+  .never-row {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 13px;
+    color: var(--muted-foreground);
+  }
+
+  .expiry-buttons {
+    display: flex;
+    gap: 6px;
   }
 </style>

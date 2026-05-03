@@ -172,6 +172,27 @@ export async function adminLogout(
   });
 }
 
+export async function adminUpdateFileExpiry(
+  fileid: string,
+  filename: string,
+  deleteAfter: number,
+  token: string,
+  fetcher: typeof fetch = fetch
+): Promise<FileMetadata> {
+  const res = await fetcher(
+    `/api/v1/${encodeURIComponent(fileid)}/${encodeURIComponent(filename)}`,
+    {
+      method: 'PATCH',
+      headers: {
+        Authorization: `Bearer ${token}`,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({ delete_after: deleteAfter })
+    }
+  );
+  return parseEnvelope<FileMetadata>(res);
+}
+
 export async function adminDeleteFile(
   fileid: string,
   filename: string,

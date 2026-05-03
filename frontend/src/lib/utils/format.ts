@@ -77,8 +77,11 @@ export interface ExpiryInfo {
   expiresAt: number;
 }
 
+// Only `-1` is the never-expires sentinel. Other negatives are treated as
+// retention windows (so they render as already-expired), matching the
+// backend's narrowed is_expired() semantics.
 export function computeExpiry(createdAt: number, deleteAfter: number, now: number = Date.now() / 1000): ExpiryInfo {
-  if (deleteAfter < 0) {
+  if (deleteAfter === -1) {
     return { enabled: false, expired: false, remainingSeconds: 0, expiresAt: 0 };
   }
   const expiresAt = createdAt + deleteAfter;
