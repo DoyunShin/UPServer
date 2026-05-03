@@ -2,16 +2,18 @@
 
 ## Release Checklist
 
-When bumping the backend version (e.g. `1.1.1` → `1.1.2`):
+Backend and frontend versions are kept in lockstep. When bumping (e.g. `1.1.1` → `1.1.2`):
 
 1. **Edit `backend/pyproject.toml`** — set `version = "X.Y.Z"`.
-2. **Sync `backend/uv.lock`** — run `uv lock` inside `backend/`. This rewrites the `ory-upserver` entry to the new version. Do not hand-edit `uv.lock`.
-3. **Sanity test** — `cd backend && uv run pytest -q`. Must be green before tagging.
-4. **Commit** — one commit, subject only, Conventional Commits style:
+2. **Edit `frontend/package.json`** — set `"version": "X.Y.Z"` to match the backend exactly.
+3. **Sync `backend/uv.lock`** — run `uv lock` inside `backend/`. Rewrites the `ory-upserver` entry. Do not hand-edit `uv.lock`.
+4. **Sync `frontend/package-lock.json`** — run `npm install --package-lock-only` inside `frontend/`. Rewrites the root `version` fields without touching `node_modules`.
+5. **Sanity test** — `cd backend && uv run pytest -q`. Must be green before tagging.
+6. **Commit** — one commit, subject only, Conventional Commits style:
    - `chore(release): X.Y.Z`
-   - Stage: `backend/pyproject.toml` and `backend/uv.lock` only.
-5. **Tag** — `git tag vX.Y.Z` (note the `v` prefix; CI matches `v*.*.*`). Do not sign or annotate unless asked.
-6. **Push (requires explicit user approval)** — push the commit and the tag together:
+   - Stage: `backend/pyproject.toml`, `backend/uv.lock`, `frontend/package.json`, `frontend/package-lock.json`.
+7. **Tag** — `git tag vX.Y.Z` (note the `v` prefix; CI matches `v*.*.*`). Do not sign or annotate unless asked.
+8. **Push (requires explicit user approval)** — push the commit and the tag together:
    - `git push origin master --follow-tags`
 
 CI side effects (no manual action needed once the tag is pushed):
@@ -21,6 +23,5 @@ CI side effects (no manual action needed once the tag is pushed):
 
 Constraints:
 
-- **Tag and pyproject version must match** — `cd.yaml` fails the release otherwise.
-- **Frontend version (`frontend/package.json`) is not bumped** for backend releases. Leave it untouched.
+- **Tag, `backend/pyproject.toml`, and `frontend/package.json` must all carry the same `X.Y.Z`** — `cd.yaml` fails the release if backend pyproject diverges from the tag, and the lockstep rule above keeps the frontend in sync.
 - **Never push tags or commits without explicit user confirmation** — the release pipeline publishes to PyPI and GHCR, which is irreversible.
