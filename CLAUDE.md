@@ -12,7 +12,7 @@ Backend and frontend versions are kept in lockstep. When bumping (e.g. `1.1.1` �
 6. **Commit** — one commit, subject only, Conventional Commits style:
    - `chore(release): X.Y.Z`
    - Stage: `backend/pyproject.toml`, `backend/uv.lock`, `frontend/package.json`, `frontend/package-lock.json`.
-7. **Tag** — `git tag vX.Y.Z` (note the `v` prefix; CI matches `v*.*.*`). Do not sign or annotate unless asked.
+7. **Tag immediately after the commit (mandatory)** — run `git tag vX.Y.Z` on the release commit you just made. Do not move on to anything else, start another change, or hand control back to the user without the tag in place. Note the `v` prefix; CI matches `v*.*.*`. Do not sign or annotate unless asked.
 8. **Push (requires explicit user approval)** — push the commit and the tag together:
    - `git push origin master --follow-tags`
 
@@ -24,4 +24,5 @@ CI side effects (no manual action needed once the tag is pushed):
 Constraints:
 
 - **Tag, `backend/pyproject.toml`, and `frontend/package.json` must all carry the same `X.Y.Z`** — `cd.yaml` fails the release if backend pyproject diverges from the tag, and the lockstep rule above keeps the frontend in sync.
+- **A release commit without a matching tag is incomplete** — every `chore(release): X.Y.Z` commit must be paired with a local `vX.Y.Z` tag in the same turn. If you ever notice a release commit without its tag, fix it before doing anything else.
 - **Never push tags or commits without explicit user confirmation** — the release pipeline publishes to PyPI and GHCR, which is irreversible.
