@@ -310,10 +310,30 @@ async def on_http_exception(request: Request, exc: StarletteHTTPException) -> Re
     )
 
 
+def _scrub_validation_errors(errors: list[dict]) -> list[dict]:
+    """Replace non-finite numeric inputs in Pydantic errors with their repr.
+
+    Pydantic includes the offending input value under ``input``. Floats
+    like ``NaN``/``Infinity`` are valid Python objects but cannot survive
+    the response JSON encoder (``allow_nan=False``) — without this scrub
+    the validation 422 turns into a 500.
+    """
+    import math
+
+    scrubbed: list[dict] = []
+    for err in errors:
+        item = dict(err)
+        val = item.get("input")
+        if isinstance(val, float) and not math.isfinite(val):
+            item["input"] = repr(val)
+        scrubbed.append(item)
+    return scrubbed
+
+
 @app.exception_handler(RequestValidationError)
 async def on_validation_error(request: Request, exc: RequestValidationError) -> JSONResponse:
     """Return validation errors using the envelope."""
-    return make_response(422, "Validation error", exc.errors())
+    return make_response(422, "Validation error", _scrub_validation_errors(exc.errors()))
 
 
 @app.exception_handler(Exception)

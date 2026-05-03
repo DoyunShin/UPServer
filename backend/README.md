@@ -35,6 +35,7 @@ ups --config /path/to/config.json
 | GET    | `/{fileid}/{filename}`            | Browser → SPA detail page; curl → direct download      |
 | GET    | `/get/{fileid}/{filename}`        | Forced direct download                                 |
 | GET    | `/api/v1/{fileid}/{filename}`     | Public metadata (owner key never included)             |
+| PATCH  | `/api/v1/{fileid}/{filename}`     | Update `delete_after` (admin only). `-1` = never; `>= 0` = retention seconds |
 | DELETE | `/api/v1/{fileid}/{filename}`     | Permanent removal — accepts `X-Owner-Key` (owner) or `Authorization: Bearer <admin-token>` (admin) |
 
 ## License

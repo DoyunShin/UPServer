@@ -1,10 +1,12 @@
 import logging
+import math
 from pathlib import Path
 from typing import Optional
 
 from oryups.config import get_config, get_storage
 from oryups.filesystem import Metadata, gdrive as GDriveStorage, local as LocalStorage
-from oryups.utils.expiry import is_expired
+from oryups.services import cache
+from oryups.utils.expiry import NEVER_EXPIRES_SENTINEL, is_expired
 
 
 logger = logging.getLogger("oryups.admin")
@@ -164,3 +166,38 @@ def _find_metadata_path(folder: Path) -> Optional[Path]:
     except FileNotFoundError:
         return None
     return None
+
+
+def update_file_expiry(fileid: str, filename: str, delete_after: float) -> Metadata:
+    """Persist a new ``delete_after`` value for the named file.
+
+    Args:
+        fileid(str): File id.
+        filename(str): Filename.
+        delete_after(float): New retention window in seconds, or
+            ``-1`` to mark the file as never-expires. Other negatives,
+            ``NaN``, and infinities are rejected.
+
+    Return:
+        metadata(Metadata): The updated metadata object loaded from
+        storage. The owner key is preserved on disk; callers that
+        serialize this for the wire MUST call ``to_dict(private=False)``.
+
+    Raises:
+        ValueError: When ``delete_after`` is not finite or is a negative
+            value other than ``-1``.
+        FileNotFoundError: When (fileid, filename) does not resolve.
+    """
+    if not math.isfinite(delete_after):
+        raise ValueError("delete_after must be a finite number")
+    if delete_after < NEVER_EXPIRES_SENTINEL:
+        raise ValueError(
+            "delete_after must be -1 (never) or >= 0 (retention seconds)"
+        )
+
+    storage = get_storage()
+    metadata = storage.load_metadata(fileid, filename)
+    metadata.delete_after = float(delete_after)
+    storage.update_metadata(metadata)
+    cache.invalidate(fileid)
+    return metadata

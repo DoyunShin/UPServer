@@ -4,8 +4,10 @@ from mimetypes import guess_type
 from threading import Thread, RLock
 from io import BytesIO
 from typing import IO, Any
+import os
 import secrets
 import string
+import tempfile
 import time
 
 LimitedStream = Any
@@ -24,6 +26,7 @@ class Metadata:
 
     optional_parentfolderID: str
     optional_gfileID: str
+    optional_metadata_gfileID: str
 
     def to_dict(self, private: bool = False):
         data = {
@@ -112,6 +115,9 @@ class storage():
     def remove(self, fileid: str, filename: str, deletepass: str, force: bool = False, permanently: bool = False) -> bool: ...
     def save(self, file: LimitedStream | IO[bytes], filesize: int | None, filename: str, fileid: str = "") -> Metadata: ...
     def load_metadata(self, fileid: str, filename: str) -> Metadata: ...
+    def update_metadata(self, metadata: Metadata) -> None:
+        """Persist mutated metadata back to storage. Override in subclasses."""
+        raise NotImplementedError("storage.update_metadata must be implemented by subclasses")
     def download(self, fileid: str, filename: str) -> Any: ...
     def get_list(self, path, dir) -> list[str]: ...
     def is_fid_exists(self, fileid: str) -> bool: ...
@@ -504,27 +510,71 @@ class gdrive(storage):
             raw_metadata = self.cachequeueID.get(fileid, {}).get("metadata")
             if isinstance(raw_metadata, Metadata): metadata = raw_metadata
             else: raise TypeError("Invalid metadata type")
+            if not getattr(metadata, "optional_metadata_gfileID", ""):
+                # The cache queue entry skipped the live folder lookup, so
+                # populate the metadata-file gid lazily from the parent
+                # folder. update_metadata() needs this to issue the Drive
+                # update against the correct file id.
+                self._populate_metadata_gfileID(metadata, filename)
         else:
             rootList = self.get_list(dir=self.root, mimeType="application/vnd.google-apps.folder")
             if fileid not in rootList:
                 raise FileNotFoundError(f"File id {fileid} or name {filename} not found")
 
             folderList = self.get_list(dir=rootList[fileid])
-            if f"{filename}.metadata" not in folderList: 
+            if f"{filename}.metadata" not in folderList:
                 raise FileNotFoundError(f"File id {fileid} or name {filename} not found")
-            
+
             metadata = Metadata()
             with self._service_lock:
                 raw = self.service.files().get_media(fileId=folderList[f"{filename}.metadata"]).execute()
             metadata.load(dataraw=raw.decode("utf-8"))
-            
+
             metadata.optional_parentfolderID = rootList[fileid]
             metadata.optional_gfileID = folderList[filename]
-        
+            metadata.optional_metadata_gfileID = folderList[f"{filename}.metadata"]
+
         if metadata.name != filename:
             raise FileNotFoundError(f"File id {fileid} or name {filename} not found")
-        
+
         return metadata
+
+    def _populate_metadata_gfileID(self, metadata: Metadata, filename: str) -> None:
+        """Resolve the metadata file's Drive gid for an already-loaded Metadata.
+
+        Used when the cache queue gave us a Metadata object that has not
+        yet seen a live folder listing.
+        """
+        parent = getattr(metadata, "optional_parentfolderID", "")
+        if not parent:
+            rootList = self.get_list(dir=self.root, mimeType="application/vnd.google-apps.folder")
+            if metadata.id not in rootList:
+                raise FileNotFoundError(f"File id {metadata.id} not found in gdrive root")
+            parent = rootList[metadata.id]
+            metadata.optional_parentfolderID = parent
+        folderList = self.get_list(dir=parent)
+        sidecar = folderList.get(f"{filename}.metadata")
+        if not sidecar:
+            raise FileNotFoundError(f"Metadata sidecar for {metadata.id}/{filename} not found")
+        metadata.optional_metadata_gfileID = sidecar
+
+    def update_metadata(self, metadata: Metadata) -> None:
+        """Replace the metadata sidecar's contents with the supplied object.
+
+        Drive API ``files().update`` is atomic at the file granularity, so
+        concurrent readers see either the previous or the new content but
+        never a partial mix.
+        """
+        if not getattr(metadata, "optional_metadata_gfileID", ""):
+            self._populate_metadata_gfileID(metadata, metadata.name)
+        payload = BytesIO(metadata.to_json(private=True).encode("utf-8"))
+        media = self.MediaIoBaseUpload(payload, mimetype="application/json")
+        with self._service_lock:
+            self.service.files().update(
+                fileId=metadata.optional_metadata_gfileID,
+                media_body=media,
+                supportsAllDrives=True,
+            ).execute()
 
     def download(self, fileid: str, filename: str) -> Any:
         raise NotImplementedError("storage.download is handled in routers/files.py for FastAPI")
@@ -657,6 +707,34 @@ class local(storage):
         
         return metadata
     
+    def update_metadata(self, metadata: Metadata) -> None:
+        """Atomically rewrite the metadata sidecar with the supplied object.
+
+        We write to a unique temp file in the same directory and then
+        rename via :meth:`Path.replace`, which is atomic on POSIX within
+        a single filesystem. Concurrent callers therefore never observe
+        a torn read, and unique temp paths via :func:`tempfile.mkstemp`
+        avoid races between simultaneous writers.
+        """
+        folder = self.root / metadata.id
+        target = folder / f"{metadata.name}.metadata"
+        if not folder.is_dir():
+            raise FileNotFoundError(f"File id {metadata.id} not found")
+
+        fd, tmp_str = tempfile.mkstemp(
+            prefix=f".{metadata.name}.",
+            suffix=".metadata.tmp",
+            dir=str(folder),
+        )
+        tmp = Path(tmp_str)
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
+                f.write(metadata.to_json(private=True))
+            tmp.replace(target)
+        except Exception:
+            tmp.unlink(missing_ok=True)
+            raise
+
     def download(self, fileid: str, filename: str) -> Any:
         raise NotImplementedError("storage.download is handled in routers/files.py for FastAPI")
 
