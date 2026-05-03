@@ -105,7 +105,8 @@ async def _stream_gdrive(storage, gfile_id: str) -> AsyncIterator[bytes]:
     downloader = MediaIoBaseDownload(buffer, request_obj, chunksize=GDRIVE_STREAM_CHUNK)
 
     def _pull_chunk() -> tuple[bytes, bool]:
-        _, finished_now = downloader.next_chunk()
+        with storage._service_lock:
+            _, finished_now = downloader.next_chunk()
         chunk = buffer.getvalue()
         buffer.seek(0)
         buffer.truncate()

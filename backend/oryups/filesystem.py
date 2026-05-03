@@ -1,7 +1,7 @@
 from pathlib import Path
 from json import loads, dumps
 from mimetypes import guess_type
-from threading import Thread
+from threading import Thread, RLock
 from io import BytesIO
 from typing import IO, Any
 import secrets
@@ -240,6 +240,7 @@ class gdrive(storage):
         from google.oauth2 import service_account
         self.credential = service_account.Credentials.from_service_account_info(config["gdrive"]["credential"], scopes=config["gdrive"]["scopes"])
         self.service = build('drive', 'v3', credentials=self.credential)
+        self._service_lock = RLock()
         self.root: str = str(config["gdrive"]["root"])
         self.cache: bool = bool(config["gdrive"]["cache"])
         if self.cache:
@@ -381,8 +382,10 @@ class gdrive(storage):
 
         if permanently:
             for name, gid in infiles.items():
-                self.service.files().delete(fileId=gid, supportsAllDrives=True).execute()
-            self.service.files().delete(fileId=parentFolderID, supportsAllDrives=True).execute()
+                with self._service_lock:
+                    self.service.files().delete(fileId=gid, supportsAllDrives=True).execute()
+            with self._service_lock:
+                self.service.files().delete(fileId=parentFolderID, supportsAllDrives=True).execute()
             return True
 
         if "delete" in rootList:
@@ -405,12 +408,17 @@ class gdrive(storage):
 
         filegid = infiles[metadata.name]
         metadatagid = infiles[f"{metadata.name}.metadata"]
-        self.service.files().update(fileId=filegid, body={"name": newname}).execute()
-        self.service.files().update(fileId=metadatagid, body={"name": f"{newname}.metadata"}).execute()
-        self.service.files().update(fileId=filegid, addParents=deleteFolder, removeParents=parentFolderID).execute()
-        self.service.files().update(fileId=metadatagid, addParents=deleteFolder, removeParents=parentFolderID).execute()
+        with self._service_lock:
+            self.service.files().update(fileId=filegid, body={"name": newname}).execute()
+        with self._service_lock:
+            self.service.files().update(fileId=metadatagid, body={"name": f"{newname}.metadata"}).execute()
+        with self._service_lock:
+            self.service.files().update(fileId=filegid, addParents=deleteFolder, removeParents=parentFolderID).execute()
+        with self._service_lock:
+            self.service.files().update(fileId=metadatagid, addParents=deleteFolder, removeParents=parentFolderID).execute()
         if len(infiles) == 2:
-            self.service.files().delete(fileId=parentFolderID).execute()
+            with self._service_lock:
+                self.service.files().delete(fileId=parentFolderID).execute()
 
         return True
         
@@ -421,7 +429,8 @@ class gdrive(storage):
         """
         query = f"'{dir}' in parents"
         if mimeType: query += f" and mimeType='{mimeType}'"
-        results = self._get_files(q=query).execute()
+        with self._service_lock:
+            results = self._get_files(q=query).execute()
         files = {}
         for i in results["files"]:
             files[i["name"]] = i["id"]
@@ -429,13 +438,15 @@ class gdrive(storage):
         return files
 
     def is_fid_exists(self, fileid: str) -> bool:
-        results = self._get_files(q=f"'{self.root}' in parents and mimeType='application/vnd.google-apps.folder' and name='{fileid}'").execute()
+        with self._service_lock:
+            results = self._get_files(q=f"'{self.root}' in parents and mimeType='application/vnd.google-apps.folder' and name='{fileid}'").execute()
         return len(results["files"]) > 0
     
     def upload(self, metadata: dict, media = None) -> str:
         kwargs = {"body": metadata, "fields": "id"}
         if media: kwargs["media_body"] = media
-        file = self.service.files().create(supportsAllDrives=True, **kwargs).execute()
+        with self._service_lock:
+            file = self.service.files().create(supportsAllDrives=True, **kwargs).execute()
         return file.get('id')
 
     def mkdir(self, name: str) -> str:
@@ -503,7 +514,9 @@ class gdrive(storage):
                 raise FileNotFoundError(f"File id {fileid} or name {filename} not found")
             
             metadata = Metadata()
-            metadata.load(dataraw=self.service.files().get_media(fileId=folderList[f"{filename}.metadata"]).execute().decode("utf-8"))
+            with self._service_lock:
+                raw = self.service.files().get_media(fileId=folderList[f"{filename}.metadata"]).execute()
+            metadata.load(dataraw=raw.decode("utf-8"))
             
             metadata.optional_parentfolderID = rootList[fileid]
             metadata.optional_gfileID = folderList[filename]
