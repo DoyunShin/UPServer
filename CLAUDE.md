@@ -13,8 +13,11 @@ Backend and frontend versions are kept in lockstep. When bumping (e.g. `1.1.1` �
    - `chore(release): X.Y.Z`
    - Stage: `backend/pyproject.toml`, `backend/uv.lock`, `frontend/package.json`, `frontend/package-lock.json`.
 7. **Tag immediately after the commit (mandatory)** — run `git tag vX.Y.Z` on the release commit you just made. Do not move on to anything else, start another change, or hand control back to the user without the tag in place. Note the `v` prefix; CI matches `v*.*.*`. Do not sign or annotate unless asked.
-8. **Push (requires explicit user approval)** — push the commit and the tag together:
-   - `git push origin master --follow-tags`
+8. **Push (requires explicit user approval)** — push the commit, then push the tag explicitly by name:
+   - `git push origin master`
+   - `git push origin vX.Y.Z`
+   - Do **not** rely on `--follow-tags`. Step 7 creates lightweight tags, and `--follow-tags` only pushes annotated ones, so the tag would silently stay local.
+   - Use the bare tag name rather than `--tags` so unrelated local tags do not leak to origin.
 
 CI side effects (no manual action needed once the tag is pushed):
 
